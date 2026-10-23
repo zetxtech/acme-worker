@@ -1,5 +1,16 @@
 # Progress
 
+## UI Consistency Pass And Commit: 2026-10-23
+- Card titles, tags, alerts and tooltips now share explicit flex alignment so lucide icons sit on the text's vertical centre; the sidebar section chips and the logo gradient use fixed colours instead of theme variables that could resolve to nothing.
+- Footer and GitHub links now point to https://github.com/zetxtech/acme-worker (constant, About page and repo remote).
+- Admin user/certificate toolbars use a shared toolbarRow style: equal 36px heights and one shadow treatment for inputs, selects, segmented radios and buttons.
+- Order actions no longer use a fullscreen Spin: the busy state is a translucent overlay covering the whole viewport, so the sidebar is dimmed consistently instead of appearing brighter. operateOrder now returns the backend message, and verification reports it, so a domain that stays 待验证 explains that DNS is not visible yet.
+- Apply step indicator disables steps that are not reachable, so the cursor no longer suggests they are clickable.
+- DCV hosting setup moved from 域名资源 to the administrator 系统管理 page, with a status banner, guided domain/token entry and the requirement that a test TXT record be written and cleaned. The provider-count info banner on 域名资源 was removed.
+- DNS credential fields now explain how to create a Cloudflare token (Edit zone DNS template, Zone Read plus DNS Edit, restricted to the needed zone). API documentation widens the error-code column and centres the copy-curl buttons.
+- Tests: full suite 35/35 passed with zero skipped; the browser flow now configures DCV from the system page and captures about/help/system screenshots. Vision review of the About and Help screenshots found no visible icon misalignment.
+- Committed locally as d09e5e6. Push is blocked: the previous origin (PIKACHUIM/CFWorkerACME) rejects writes (403) and the requested target zetxtech/acme-worker does not exist yet; origin now points at the new URL with the upstream kept as a separate remote.
+
 ## CA Account Reuse And One-Time EAB: 2026-10-23
 - Reported problem: Google Public CA credentials appeared to expire and had to be re-entered by hand. Verified against primary sources: Google's EAB secret is single-use and is invalidated if unused within 7 days, but the ACME account it registers has no expiry; ZeroSSL has made EAB credentials reusable since March 2022; SSL.com and ZeroSSL bind to the account key, not to the EAB.
 - Root cause in this codebase: CA availability demanded EAB plus an admin-supplied account key at all times, and the account identity is derived from the key. Any key change (including a re-pasted PEM) produced a new identity, so a fresh registration consumed a fresh EAB.

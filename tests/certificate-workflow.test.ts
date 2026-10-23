@@ -874,6 +874,14 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         assert.deepEqual(calls.find((call) => call.path === "/resources/dcv")!.body,
             {domain: "dcv.example.org", token: "fixture-dcv-token", confirmWrite: true});
         await assertShell();
+        await page.screenshot({path: directory + "desktop-admin-system.png", fullPage: true});
+        await page.setViewportSize({width: 1440, height: 1000});
+        await page.goto(`${base}/#/about`);
+        await page.getByText("技术栈", {exact: false}).first().waitFor();
+        await page.screenshot({path: directory + "desktop-about.png", fullPage: true});
+        await page.goto(`${base}/#/help`);
+        await page.getByText("支持的证书品牌", {exact: false}).first().waitFor();
+        await page.screenshot({path: directory + "desktop-help.png", fullPage: true});
         await page.goto(`${base}/#/apply`);
         await page.getByPlaceholder("example.com", {exact: true}).fill("example.com");
         await page.getByText("DNS \u8d26\u6237", {exact: true}).click();
