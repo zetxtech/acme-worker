@@ -490,3 +490,15 @@
   color: var(--err);
   padding-left: 2px;
 }
+
+/* 操作进行中的遮罩：与页面加载一致的半透明效果，整页均匀变暗 */
+.busyMask {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-base) 68%, transparent);
+  backdrop-filter: blur(2px);
+}

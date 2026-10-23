@@ -383,7 +383,7 @@ export default function AdminCertsPage() {
 
   return (
     <div style={{ padding: 24 }}>
-      <Space style={{ marginBottom: 16, flexWrap: 'wrap' }} size={8}>
+      <Space className="toolbarRow" style={{ marginBottom: 16, flexWrap: 'wrap' }} size={8}>
         <Input
           allowClear
           style={{ width: 200 }}
@@ -406,7 +406,6 @@ export default function AdminCertsPage() {
           onChange={(e) => setFlagFilter(e.target.value === '' ? undefined : e.target.value)}
           optionType="button"
           buttonStyle="solid"
-          size="small"
         >
           <Radio.Button value="">全部状态</Radio.Button>
           {FLAG_OPTIONS.map((o) => (

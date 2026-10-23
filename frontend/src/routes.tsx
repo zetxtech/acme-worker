@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { App as AntdApp } from 'antd';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { AnimatePresence } from 'framer-motion';
+import AdminLayout from '@layouts/AdminLayout';
+import ProtectedRoute from '@components/Layout/ProtectedRoute';
 import { configureApiHandlers } from '@api/request';
 import { useAuthStore } from '@stores/useAuthStore';
 import { useBootstrapStore } from '@stores/useBootstrapStore';
@@ -9,7 +10,6 @@ import Loading from '@components/molecules/Loading';
 
 // 路由懒加载
 const PublicLayout = lazy(() => import('@layouts/PublicLayout'));
-const AdminLayout = lazy(() => import('@layouts/AdminLayout'));
 const Home = lazy(() => import('@pages/Home'));
 const Login = lazy(() => import('@pages/Login'));
 const Panel = lazy(() => import('@pages/Panel'));
@@ -24,7 +24,8 @@ const Setup = lazy(() => import('@pages/Setup'));
 const AdminUsers = lazy(() => import('@pages/Admin/Users'));
 const AdminCerts = lazy(() => import('@pages/Admin/Certs'));
 const AdminSystem = lazy(() => import('@pages/Admin/System'));
-const ProtectedRoute = lazy(() => import('@components/Layout/ProtectedRoute'));
+const AdminAutomation = lazy(() => import('@pages/Admin/Automation'));
+const Resources = lazy(() => import('@pages/Resources'));
 
 function AppRoutes() {
   const location = useLocation();
@@ -41,7 +42,8 @@ function AppRoutes() {
       onError: (msg) => message.error(msg),
       onUnauthorized: () => {
         clearAuth();
-        if (!location.pathname.startsWith('/login') && location.pathname !== '/') {
+        const path = window.location.hash.slice(1).split('?')[0];
+        if (!path.startsWith('/login') && path !== '/') {
           window.location.hash = '#/login';
         }
       },
@@ -57,7 +59,7 @@ function AppRoutes() {
   const isSetupPath = location.pathname.startsWith('/setup');
   if (needsSetup && !isSetupPath) {
     return (
-      <Suspense fallback={<Loading full />}>
+      <Suspense fallback={<Loading full overlay />}>
         <Routes>
           <Route path="/setup" element={<Setup />} />
           <Route path="*" element={<Navigate to="/setup" replace />} />
@@ -68,13 +70,12 @@ function AppRoutes() {
 
   // 尚未获取到 bootstrap 时展示全局 loading，避免闪烁
   if (!bootstrap && bootstrapLoading) {
-    return <Loading full />;
+    return <Loading full overlay />;
   }
 
   return (
-    <Suspense fallback={<Loading full />}>
-      <AnimatePresence mode="wait">
-        <Routes location={location} key={location.pathname}>
+    <Suspense fallback={<Loading full overlay />}>
+        <Routes>
           {/* Setup 页面：initialized 后自行跳登录 */}
           <Route path="/setup" element={<Setup />} />
 
@@ -95,29 +96,22 @@ function AppRoutes() {
             <Route path="/panel" element={<Panel />} />
             <Route path="/certs" element={<Certs />} />
             <Route path="/apply" element={<Apply />} />
+            <Route path="/domains" element={<Resources key="domains" kind="dns" />} />
+            <Route path="/deployments" element={<Resources key="deployments" kind="targets" />} />
+            <Route path="/resources" element={<Navigate to="/domains" replace />} />
             <Route path="/order/:uuid" element={<Order />} />
             <Route path="/account" element={<Account />} />
             <Route path="/account/apidoc" element={<ApiDoc />} />
             <Route path="/help" element={<Help />} />
             <Route path="/about" element={<About />} />
-          </Route>
-
-          {/* 管理员路由 */}
-          <Route
-            element={
-              <ProtectedRoute requireAdmin>
-                <AdminLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route path="/admin/users" element={<AdminUsers />} />
-            <Route path="/admin/certs" element={<AdminCerts />} />
-            <Route path="/admin/system" element={<AdminSystem />} />
+            <Route path="/admin/users" element={<ProtectedRoute requireAdmin><AdminUsers /></ProtectedRoute>} />
+            <Route path="/admin/certs" element={<ProtectedRoute requireAdmin><AdminCerts /></ProtectedRoute>} />
+            <Route path="/admin/system" element={<ProtectedRoute requireAdmin><AdminSystem /></ProtectedRoute>} />
+            <Route path="/admin/automation" element={<ProtectedRoute requireAdmin><AdminAutomation /></ProtectedRoute>} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-      </AnimatePresence>
     </Suspense>
   );
 }

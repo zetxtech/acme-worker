@@ -1,0 +1,7 @@
+{
+    "name": "certhub-lego-wasm-probe",
+    "main": "entry.js",
+    "compatibility_date": "2026-01-01",
+    "compatibility_flags": ["nodejs_compat"],
+    "workers_dev": false
+}

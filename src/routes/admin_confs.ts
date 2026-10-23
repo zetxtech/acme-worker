@@ -49,6 +49,7 @@ const ALLOWED_KEYS: string[] = [
     "API_RATE_LIMIT",
     // DCV（Cloudflare DNS 代理）------------------------
     "DCV_AGENT", "DCV_EMAIL", "DCV_TOKEN", "DCV_ZONES",
+    "DCV_TARGET_PATTERN",
     // 证书提供商 · Google Trust Services --------------
     "GTS_useIt", "GTS_keyMC", "GTS_keyID", "GTS_KeyTS",
     // 证书提供商 · SSL.com ----------------------------

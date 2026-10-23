@@ -64,6 +64,24 @@
   margin-bottom: 8px;
 }
 
+/* 分组图标底色，避免在面板背景上看不清 */
+.menuLabel > svg {
+  flex-shrink: 0;
+  display: block;
+  width: 18px;
+  height: 18px;
+  padding: 3px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  background: var(--brand-softer);
+  color: var(--brand-ink);
+}
+
+.menuAdmin > svg {
+  background: var(--accent-softer);
+  color: var(--accent-ink);
+}
+
 /* ---------- 菜单 ---------- */
 .menu {
   display: flex;

@@ -13,6 +13,8 @@ const API_PATHS = [
   '/check',
   '/exits',
   '/apply',
+  '/capabilities',
+  '/resources',
   '/order',
   '/acmes',
   '/token',
@@ -84,7 +86,7 @@ export default defineConfig({
       API_PATHS.map((p) => [
         p,
         {
-          target: 'http://127.0.0.1:8787',
+          target: process.env.CFWORKER_API_URL || 'http://127.0.0.1:8787',
           changeOrigin: true,
           secure: false,
         },

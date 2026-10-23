@@ -309,6 +309,7 @@ export default function AdminUsersPage() {
   return (
     <div style={{ padding: 24 }}>
       <Space
+        className="toolbarRow"
         style={{ marginBottom: 16, flexWrap: 'wrap' }}
         size={8}
       >
@@ -326,7 +327,6 @@ export default function AdminUsersPage() {
           onChange={(e) => setFlagFilter(e.target.value || undefined)}
           optionType="button"
           buttonStyle="solid"
-          size="small"
         >
           <Radio.Button value="">全部状态</Radio.Button>
           <Radio.Button value="0">未激活</Radio.Button>
@@ -338,7 +338,6 @@ export default function AdminUsersPage() {
           onChange={(e) => setAdminFilter(e.target.value || undefined)}
           optionType="button"
           buttonStyle="solid"
-          size="small"
         >
           <Radio.Button value="">全部用户</Radio.Button>
           <Radio.Button value="1">仅管理员</Radio.Button>

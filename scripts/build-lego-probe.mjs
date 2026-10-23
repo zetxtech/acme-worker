@@ -1,0 +1,28 @@
+import {execFileSync} from "node:child_process";
+import {cpSync, mkdirSync, readFileSync, writeFileSync} from "node:fs";
+import {join, resolve} from "node:path";
+import {fileURLToPath} from "node:url";
+import {gzipSync} from "node:zlib";
+import {createOverlay} from "./create-lego-doh-overlay.mjs";
+import {resolveUpstream} from "./sync-lego-dns-providers.mjs";
+
+const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const output = join(root, "_artifacts", "lego-dns", "probe");
+const source = resolveUpstream("v5.5.2");
+const localSource = join(output, "upstream");
+mkdirSync(output, {recursive: true});
+cpSync(source, localSource, {recursive: true});
+const overlay = createOverlay({sourceRoot: localSource, outputDirectory: output});
+writeFileSync(join(output, "go.mod"), `module acme-lego-probe\n\ngo 1.26.0\n\nrequire github.com/go-acme/lego/v5 v5.5.2\n\nreplace github.com/go-acme/lego/v5 => ${JSON.stringify(localSource.replaceAll("\\", "/"))}\n`);
+cpSync(join(source, "go.sum"), join(output, "go.sum"));
+const env = {...process.env, GOOS: "js", GOARCH: "wasm", GOTOOLCHAIN: "auto"};
+const run = (args) => execFileSync("go", args, {cwd: output, env, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"]}).trim();
+run(["build", "-mod=mod", "-trimpath", "-ldflags=-s -w", `-overlay=${overlay.overlayPath}`, "-o", join(output, "selected.wasm"), join(root, "tests/lego-wasm-probe/selected/main.go")]);
+const goRoot = run(["env", "GOROOT"]);
+cpSync(join(goRoot, "lib/wasm/wasm_exec.js"), join(output, "wasm_exec.js"));
+for (const name of ["entry.js", "runtime-shim.js"]) cpSync(join(root, "tests/lego-wasm-probe", name), join(output, name));
+writeFileSync(join(output, "wrangler.jsonc"), JSON.stringify({name: "acme-lego-local-probe", main: "entry.js", compatibility_date: "2026-01-01", compatibility_flags: ["nodejs_compat"], workers_dev: false}, null, 2));
+const wasm = readFileSync(join(output, "selected.wasm"));
+const report = {runtime: "github.com/go-acme/lego/v5@v5.5.2", toolchain: run(["version"]), wasmBytes: wasm.length, wasmGzipBytes: gzipSync(wasm).length};
+writeFileSync(join(output, "build-report.json"), JSON.stringify(report, null, 2));
+console.log(JSON.stringify(report, null, 2));

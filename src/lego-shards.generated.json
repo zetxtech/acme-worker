@@ -1,0 +1,784 @@
+{
+  "runtimeVersion": "v5.5.2",
+  "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+  "providerCount": 223,
+  "incompatible": [
+    {
+      "id": "azuredns",
+      "reason": "provider reads filesystem credentials or configuration; provider identity discovery is not verified in Workers"
+    },
+    {
+      "id": "bunny",
+      "reason": "upstream cleanup selects the first TXT by name/type instead of the owned value or record ID"
+    },
+    {
+      "id": "dnsupdate",
+      "reason": "provider reads filesystem credentials or configuration; provider uses a direct network resolver instead of the shared DoH path"
+    },
+    {
+      "id": "exec",
+      "reason": "provider invokes subprocesses"
+    },
+    {
+      "id": "gcloud",
+      "reason": "provider reads filesystem credentials or configuration"
+    },
+    {
+      "id": "hyperone",
+      "reason": "provider reads filesystem credentials or configuration"
+    },
+    {
+      "id": "internetbs",
+      "reason": "provider requires filesystem writes, unavailable in Workers"
+    },
+    {
+      "id": "lightsail",
+      "reason": "provider default cloud credential/file/instance identity chain is not verified in Workers"
+    },
+    {
+      "id": "manual",
+      "reason": "provider requires interactive standard input"
+    },
+    {
+      "id": "oraclecloud",
+      "reason": "provider reads filesystem credentials or configuration; provider identity discovery is not verified in Workers"
+    },
+    {
+      "id": "route53",
+      "reason": "provider default cloud credential/file/instance identity chain is not verified in Workers"
+    }
+  ],
+  "limitsSource": "https://developers.cloudflare.com/workers/platform/limits/ (2026-10-12)",
+  "limits": {
+    "freeWorkerCount": 100,
+    "paidWorkerCount": 5001,
+    "uncompressedBytes": 67108864,
+    "compressedLimit": null,
+    "memoryBytes": 134217728,
+    "freeCpuMs": 10,
+    "paidMaxCpuMs": 300000,
+    "startupMs": 1000,
+    "freeSubrequests": 50,
+    "paidSubrequests": 10000,
+    "simultaneousConnections": 6
+  },
+  "shards": [
+    {
+      "id": "shard-001",
+      "binding": "LEGO_DNS_SHARD_001",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "5664ac5d4c4ae230ee3a65443e77097e19c1d052a0b50aae4e4edcff62bc2d23",
+      "providers": [
+        "abion",
+        "acmedns",
+        "active24",
+        "alidns",
+        "aliesa",
+        "allinkl",
+        "alwaysdata"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 17554401,
+      "gzipBytes": 4255275,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 19540.35 KiB / gzip: 4475.70 KiB"
+    },
+    {
+      "id": "shard-002",
+      "binding": "LEGO_DNS_SHARD_002",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "ebc1252afa24f60f414fffd0120967b5057cda9507c2bfc229506c0c08f9f9cb",
+      "providers": [
+        "anexia",
+        "artfiles",
+        "arvancloud",
+        "auroradns",
+        "autodns",
+        "axelname",
+        "azion"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 14115713,
+      "gzipBytes": 3581296,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 16182.26 KiB / gzip: 3817.86 KiB"
+    },
+    {
+      "id": "shard-003",
+      "binding": "LEGO_DNS_SHARD_003",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "915f49d0b7425097f702c707a4237695d345f071c905f65652a3acc08d6ead82",
+      "providers": [
+        "baiducloud",
+        "beget",
+        "binarylane",
+        "bindman",
+        "bluecat",
+        "bluecatv2",
+        "bookmyname"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13776921,
+      "gzipBytes": 3501041,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15851.41 KiB / gzip: 3739.54 KiB"
+    },
+    {
+      "id": "shard-004",
+      "binding": "LEGO_DNS_SHARD_004",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "5388c4b94886c024b7719574e1a465f4fb46ed84d9473c4f397d7220a9a97829",
+      "providers": [
+        "checkdomain",
+        "civo",
+        "clouddns",
+        "cloudflare",
+        "cloudns",
+        "cloudru",
+        "com35"
+      ],
+      "verifiedProviders": [
+        "cloudflare"
+      ],
+      "wasmBytes": 13810155,
+      "gzipBytes": 3563324,
+      "status": "runtime_verified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15883.88 KiB / gzip: 3799.98 KiB"
+    },
+    {
+      "id": "shard-005",
+      "binding": "LEGO_DNS_SHARD_005",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "1ec931449f805a4cab89c80dbeb9b20ec3c51338c2edf064f9f9370b8ecacca4",
+      "providers": [
+        "connbyte",
+        "conoha",
+        "conohav3",
+        "constellix",
+        "corenetworks",
+        "cpanel",
+        "curanet"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13710374,
+      "gzipBytes": 3477280,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15786.42 KiB / gzip: 3716.30 KiB"
+    },
+    {
+      "id": "shard-006",
+      "binding": "LEGO_DNS_SHARD_006",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "6c4271872b82df965ca6179e527f7f47bbbf09280adf7253126f72ffb7abc0a7",
+      "providers": [
+        "czechia",
+        "dandomain",
+        "ddnss",
+        "derak",
+        "desec",
+        "designate",
+        "digitalocean"
+      ],
+      "verifiedProviders": [
+        "digitalocean",
+        "desec"
+      ],
+      "wasmBytes": 15155552,
+      "gzipBytes": 3818627,
+      "status": "runtime_verified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 17197.76 KiB / gzip: 4049.16 KiB"
+    },
+    {
+      "id": "shard-007",
+      "binding": "LEGO_DNS_SHARD_007",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "430dc17018cfce24a952c7af4fe79fb21f7abe978ddbb1a17abb04535488a593",
+      "providers": [
+        "dinahosting",
+        "directadmin",
+        "dns51",
+        "dnscale",
+        "dnsexit",
+        "dnshomede",
+        "dnsimple"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13573401,
+      "gzipBytes": 3456662,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15652.66 KiB / gzip: 3695.59 KiB"
+    },
+    {
+      "id": "shard-008",
+      "binding": "LEGO_DNS_SHARD_008",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "4bb5c39260fb503976f37a039db4fe900656c43027e4e340c621b0c41d61cea7",
+      "providers": [
+        "dnsla",
+        "dnsmadeeasy",
+        "dnsmint",
+        "dnsservices",
+        "dode",
+        "domeneshop",
+        "dreamhost"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13355638,
+      "gzipBytes": 3407244,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15440.00 KiB / gzip: 3647.42 KiB"
+    },
+    {
+      "id": "shard-009",
+      "binding": "LEGO_DNS_SHARD_009",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "fee03e6ebd7a01fd90310db1a9cc9215a409fd7f2137d02b188388af1350a5f4",
+      "providers": [
+        "duckdns",
+        "dyn",
+        "dynadot",
+        "dyndnsfree",
+        "dynu",
+        "easydns",
+        "edgecenter"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13432962,
+      "gzipBytes": 3418698,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15515.50 KiB / gzip: 3658.93 KiB"
+    },
+    {
+      "id": "shard-010",
+      "binding": "LEGO_DNS_SHARD_010",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "c6c0a10753bae9bd3228c33379d1e0327b4295d526fbbde4a7317041126d66ea",
+      "providers": [
+        "edgedns",
+        "edgeone",
+        "efficientip",
+        "epik",
+        "eurodns",
+        "euserv",
+        "excedo"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 21356973,
+      "gzipBytes": 4918973,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 23253.80 KiB / gzip: 5123.79 KiB"
+    },
+    {
+      "id": "shard-011",
+      "binding": "LEGO_DNS_SHARD_011",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "0b371f1187a719a9f74a1fb48f8bdc34c22f2a8d90b92ab521fffcf1d2f265e5",
+      "providers": [
+        "exoscale",
+        "f5xc",
+        "feno",
+        "fornex",
+        "freemyip",
+        "gandi",
+        "gandiv5"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 26229442,
+      "gzipBytes": 5634258,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 28012.06 KiB / gzip: 5822.27 KiB"
+    },
+    {
+      "id": "shard-012",
+      "binding": "LEGO_DNS_SHARD_012",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "6f950a9d28b3b60d92ffcb27bbb32e2dedb7754fa5160bc69c6c05731273d2b3",
+      "providers": [
+        "gcore",
+        "gehirn",
+        "gigahostno",
+        "glesys",
+        "gname",
+        "godaddy",
+        "gravity"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13725430,
+      "gzipBytes": 3524524,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15801.12 KiB / gzip: 3762.01 KiB"
+    },
+    {
+      "id": "shard-013",
+      "binding": "LEGO_DNS_SHARD_013",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "a115eb853ebaa51f2aec5ac9aff8d1524ef1d233fbb978ddc8391ddee06b9687",
+      "providers": [
+        "hetzner",
+        "hostingde",
+        "hostinger",
+        "hostingnl",
+        "hosttech",
+        "hostup",
+        "httpnet"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13619531,
+      "gzipBytes": 3447137,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15697.71 KiB / gzip: 3686.77 KiB"
+    },
+    {
+      "id": "shard-014",
+      "binding": "LEGO_DNS_SHARD_014",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "d17def7fa0edd4581aa27f1594405db8328f1881aec28165595a39fd5eb2b9a1",
+      "providers": [
+        "httpreq",
+        "huaweicloud",
+        "hurricane",
+        "ibmcloud",
+        "iijdpf",
+        "infoblox",
+        "infomaniak"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 22180516,
+      "gzipBytes": 5176065,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 24058.05 KiB / gzip: 5375.57 KiB"
+    },
+    {
+      "id": "shard-015",
+      "binding": "LEGO_DNS_SHARD_015",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "5e89f886502fafd35ed726acc87f3221aa8991c107a8af8aea50d87aad94f424",
+      "providers": [
+        "inwx",
+        "ionos",
+        "ionoscloud",
+        "ipv64",
+        "ispconfig",
+        "ispconfigddns",
+        "jdcloud"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 15197656,
+      "gzipBytes": 3817943,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 17238.84 KiB / gzip: 4048.59 KiB"
+    },
+    {
+      "id": "shard-016",
+      "binding": "LEGO_DNS_SHARD_016",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "f20020d520fe8f6fa29d137d68e14801808dff19b4299fb0717c5e30c6b66015",
+      "providers": [
+        "joker",
+        "katapult",
+        "keyhelp",
+        "leaseweb",
+        "liara",
+        "limacity",
+        "linode"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 15740477,
+      "gzipBytes": 3975455,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 17768.94 KiB / gzip: 4202.53 KiB"
+    },
+    {
+      "id": "shard-017",
+      "binding": "LEGO_DNS_SHARD_017",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "9011e19fefd4eaf19b8602d8fe9982fb7afc6051bd097d902248a3ee40cc056f",
+      "providers": [
+        "liquidweb",
+        "loopia",
+        "luadns",
+        "mailinabox",
+        "manageengine",
+        "metaname",
+        "metaregistrar"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 14164543,
+      "gzipBytes": 3593524,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 16229.96 KiB / gzip: 3829.50 KiB"
+    },
+    {
+      "id": "shard-018",
+      "binding": "LEGO_DNS_SHARD_018",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "34f08c5ddda5993b28a78a813a1c62baa183420885b6fe85bbfee2b9250a5f73",
+      "providers": [
+        "mijnhost",
+        "mittwald",
+        "myaddr",
+        "mydnsjp",
+        "myra",
+        "mythicbeasts",
+        "namecheap"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 14380790,
+      "gzipBytes": 3655531,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 16441.12 KiB / gzip: 3890.42 KiB"
+    },
+    {
+      "id": "shard-019",
+      "binding": "LEGO_DNS_SHARD_019",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "32c65d2d14cb0854db26d97ede0c97ba5ebf782f5cee66842556ed866a1834db",
+      "providers": [
+        "namedotcom",
+        "namesilo",
+        "namesurfer",
+        "nearlyfreespeech",
+        "nederhost",
+        "neodigit",
+        "netcup"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13645634,
+      "gzipBytes": 3478299,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15723.21 KiB / gzip: 3717.34 KiB"
+    },
+    {
+      "id": "shard-020",
+      "binding": "LEGO_DNS_SHARD_020",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "7bc0c4e84fbf8d75df8a7e7e1fde4fa7a222426bc049744815fbaabc79394ad0",
+      "providers": [
+        "netlify",
+        "netnod",
+        "nexdns",
+        "ngenix",
+        "nicmanager",
+        "nicru",
+        "nifcloud"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13911044,
+      "gzipBytes": 3532116,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15982.38 KiB / gzip: 3769.74 KiB"
+    },
+    {
+      "id": "shard-021",
+      "binding": "LEGO_DNS_SHARD_021",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "026afd5ded585493dd8818245e93f71e11b74d9b6914331173ea69690d321449",
+      "providers": [
+        "njalla",
+        "nodion",
+        "ns1",
+        "octenium",
+        "omglol",
+        "onecloudru",
+        "onlinenet"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13747413,
+      "gzipBytes": 3493764,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15822.59 KiB / gzip: 3732.04 KiB"
+    },
+    {
+      "id": "shard-022",
+      "binding": "LEGO_DNS_SHARD_022",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "e8017ece92aa0fcb288dd692c82562b0f4c0b3e0869e81924bda59da162ca7c8",
+      "providers": [
+        "openprovider",
+        "opusdns",
+        "otc",
+        "ovh",
+        "pdns",
+        "plesk",
+        "pointdns"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 14002734,
+      "gzipBytes": 3561707,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 16071.92 KiB / gzip: 3798.32 KiB"
+    },
+    {
+      "id": "shard-023",
+      "binding": "LEGO_DNS_SHARD_023",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "887a5702afe797254a8bef2161ebab5e3d61c0940879045504add4af9e006887",
+      "providers": [
+        "porkbun",
+        "poweradmin",
+        "rackspace",
+        "rage4",
+        "rainyun",
+        "rcodezero",
+        "regfish"
+      ],
+      "verifiedProviders": [
+        "porkbun"
+      ],
+      "wasmBytes": 13815006,
+      "gzipBytes": 3516169,
+      "status": "runtime_verified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15888.62 KiB / gzip: 3753.91 KiB"
+    },
+    {
+      "id": "shard-024",
+      "binding": "LEGO_DNS_SHARD_024",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "b0b2a5a97f662d26379f1b108912c89abadc6dc572764fcca68cb930e5596794",
+      "providers": [
+        "regru",
+        "rimuhosting",
+        "safedns",
+        "sakuracloud",
+        "scaleway",
+        "scannet",
+        "selectel"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 16930997,
+      "gzipBytes": 4106832,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 18931.56 KiB / gzip: 4331.00 KiB"
+    },
+    {
+      "id": "shard-025",
+      "binding": "LEGO_DNS_SHARD_025",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "a2ae77c7afdec05bb9c53dbaad018fdb95b94470f472faa2a1079246b8479337",
+      "providers": [
+        "selectelv2",
+        "selfhostde",
+        "servercow",
+        "shellrent",
+        "simply",
+        "sonic",
+        "spaceship"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 14075295,
+      "gzipBytes": 3540882,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 16142.79 KiB / gzip: 3778.00 KiB"
+    },
+    {
+      "id": "shard-026",
+      "binding": "LEGO_DNS_SHARD_026",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "ca338e0670e5715b206f61c3a2454bd37ec94c012158b9e857aa61784a15f8f8",
+      "providers": [
+        "stackpath",
+        "syse",
+        "technitium",
+        "tele3",
+        "tencentcloud",
+        "timewebcloud",
+        "todaynic"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 14372622,
+      "gzipBytes": 3608522,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 16433.15 KiB / gzip: 3843.85 KiB"
+    },
+    {
+      "id": "shard-027",
+      "binding": "LEGO_DNS_SHARD_027",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "c8ec1de246175a162bf68c9a190c0dd545201f0802b90cd15cdee1f4f3ec2d63",
+      "providers": [
+        "transip",
+        "ucloud",
+        "ultradns",
+        "uniteddomains",
+        "variomedia",
+        "veesp",
+        "vegadns"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 14519809,
+      "gzipBytes": 3634149,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 16576.89 KiB / gzip: 3869.54 KiB"
+    },
+    {
+      "id": "shard-028",
+      "binding": "LEGO_DNS_SHARD_028",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "a35678e8b24877736819b367c9b68913956992c9708446ab9355307360b25058",
+      "providers": [
+        "vercel",
+        "versio",
+        "vinyldns",
+        "virtualname",
+        "vkcloud",
+        "volcengine",
+        "vscale"
+      ],
+      "verifiedProviders": [
+        "vercel"
+      ],
+      "wasmBytes": 14566613,
+      "gzipBytes": 3645204,
+      "status": "runtime_verified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 16622.61 KiB / gzip: 3880.03 KiB"
+    },
+    {
+      "id": "shard-029",
+      "binding": "LEGO_DNS_SHARD_029",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "a372cbc3efa2b32efe54557ca209c31cb19cbec88ef89090f327182eb001a34d",
+      "providers": [
+        "vultr",
+        "wannafind",
+        "webglobe",
+        "webnamesca",
+        "webnamesru",
+        "websupport",
+        "wedos"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 14097143,
+      "gzipBytes": 3544432,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 16164.13 KiB / gzip: 3781.50 KiB"
+    },
+    {
+      "id": "shard-030",
+      "binding": "LEGO_DNS_SHARD_030",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "f4e70d5634a4983d78f03b6f6dd7f1d09d33efab464bd13e62a2e78f9913b7a8",
+      "providers": [
+        "westcn",
+        "xinnet",
+        "yandex",
+        "yandex360",
+        "yandexcloud",
+        "zilore",
+        "zoneedit"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 32943759,
+      "gzipBytes": 6798148,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 34569.02 KiB / gzip: 6959.06 KiB"
+    },
+    {
+      "id": "shard-031",
+      "binding": "LEGO_DNS_SHARD_031",
+      "runtimeVersion": "v5.5.2",
+      "upstreamChecksum": "h1:SJ5cMZDoyg5hB6tYpZoFcwgzkJVJI1yu5f0N8gAEeVs=",
+      "sourceHash": "1ae0be7f06806f694ec9d39ebdbfb7a8c607d29ba3354089e9c651f350d86654",
+      "buildHash": "e3ae2a9b107c62c35eda110ffb8e28e65a38b39dff256082520256ba7e60f9ba",
+      "providers": [
+        "zoneee",
+        "zonomi"
+      ],
+      "verifiedProviders": [],
+      "wasmBytes": 13353814,
+      "gzipBytes": 3420653,
+      "status": "built_unverified",
+      "toolchain": "go version go1.26.0 windows/amd64",
+      "wranglerUpload": "Total Upload: 15438.14 KiB / gzip: 3661.00 KiB"
+    }
+  ]
+}

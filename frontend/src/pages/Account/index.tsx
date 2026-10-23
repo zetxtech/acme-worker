@@ -1,7 +1,6 @@
 import { UserCog } from 'lucide-react';
 import PageShell from '@components/Layout/PageShell';
 import SectionHeader from '@components/Layout/SectionHeader';
-import TerminalPrompt from '@components/molecules/TerminalPrompt';
 import { useAuthStore } from '@stores/useAuthStore';
 import AcmeSection from '@pages/Panel/AcmeSection';
 import UserSection from '@pages/Panel/UserSection';
@@ -12,16 +11,6 @@ export default function Account() {
 
   return (
     <PageShell>
-      {/* 终端提示 */}
-      <div className={styles.greet}>
-        <TerminalPrompt
-          user={email?.split('@')[0] || 'guest'}
-          host="certhub"
-          path="~/account"
-          suffix={<span className={styles.cmdText}>whoami</span>}
-        />
-      </div>
-
       {/* 标题 */}
       <SectionHeader
         icon={<UserCog size={18} />}

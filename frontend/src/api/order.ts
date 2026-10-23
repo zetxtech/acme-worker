@@ -106,7 +106,7 @@ export async function operateOrder(
   action: OrderAction,
   domainName?: string,
   opts?: { revokeReason?: RevokeReason },
-): Promise<string> {
+): Promise<{ value: string; texts: string }> {
   const params: Record<string, any> = { id: uuid, op: action };
   if (domainName) params.cd = domainName;
   if (action === 'ca_del' && opts?.revokeReason !== undefined) {
@@ -114,5 +114,5 @@ export async function operateOrder(
   }
   const data = await apiGet<ApiResp>('/order/', params);
   if (data.flags !== 0) throw new Error(data.texts || '操作失败');
-  return (data.order as string) || '';
+  return { value: (data.order as string) || '', texts: data.texts || '' };
 }

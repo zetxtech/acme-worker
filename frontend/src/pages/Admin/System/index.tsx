@@ -11,9 +11,11 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   App as AntdApp,
   Button,
   Card,
+  Checkbox,
   Col,
   Divider,
   Input,
@@ -42,6 +44,7 @@ import {
   testCaptcha,
 } from '@api/adminConfs';
 import { useBootstrapStore } from '@stores/useBootstrapStore';
+import { configureDcv, fetchCapabilities, type DcvState } from '@api/resources';
 
 type Items = Record<string, any>;
 type Touched = Record<string, boolean>;
@@ -103,6 +106,37 @@ export default function AdminSystemPage() {
   const [secretKeys, setSecretKeys] = useState<Set<string>>(new Set());
   const [dirty, setDirty] = useState<Touched>({});
 
+  // DCV 托管设置向导
+  const [dcv, setDcv] = useState<DcvState>();
+  const [dcvOpen, setDcvOpen] = useState(false);
+  const [dcvBusy, setDcvBusy] = useState(false);
+  const [dcvDomain, setDcvDomain] = useState('');
+  const [dcvToken, setDcvToken] = useState('');
+  const [dcvConfirm, setDcvConfirm] = useState(false);
+  const [dcvError, setDcvError] = useState('');
+
+  const loadDcv = async () => {
+    try {
+      const result: any = await fetchCapabilities();
+      if (result.flags === 0) setDcv(result.dcv);
+    } catch { /* 保留上一次状态 */ }
+  };
+
+  const saveDcv = async () => {
+    setDcvError('');
+    if (!dcvDomain.trim()) { setDcvError('请填写托管域名'); return; }
+    if (!dcvConfirm) { setDcvError('请先确认允许临时 TXT 写入与清理'); return; }
+    setDcvBusy(true);
+    try {
+      const result = await configureDcv({ domain: dcvDomain.trim(), token: dcvToken.trim() || undefined, confirmWrite: true });
+      setDcv(result.dcv);
+      setDcvOpen(false);
+      message.success('DCV 托管已启用');
+    } catch (e: any) {
+      setDcvError(e?.texts || e?.message || '启用失败，请检查 Token 权限');
+    } finally { setDcvBusy(false); }
+  };
+
   // 邮件测试弹窗
   const [mailTestOpen, setMailTestOpen] = useState(false);
   const [mailTo, setMailTo] = useState('');
@@ -133,6 +167,7 @@ export default function AdminSystemPage() {
 
   useEffect(() => {
     fetchAll();
+    void loadDcv();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -521,20 +556,93 @@ export default function AdminSystemPage() {
       </Card>
 
       {/* DCV（Cloudflare DNS 代理）============================= */}
-      <Card title="DCV（Cloudflare DNS 代理）" style={{ marginBottom: 16 }}>
+      <Card
+        title="DCV 托管（Cloudflare DNS 代理）"
+        style={{ marginBottom: 16 }}
+        extra={
+          <Button
+            onClick={() => {
+              setDcvDomain(dcv?.domain || '');
+              setDcvToken('');
+              setDcvConfirm(false);
+              setDcvError('');
+              setDcvOpen(true);
+            }}
+          >
+            {dcv?.available ? '重新配置' : '启用 DCV 托管'}
+          </Button>
+        }
+      >
+        <Alert
+          type={dcv?.available ? 'success' : 'warning'}
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={
+            dcv?.available
+              ? `已启用：委派域名 ${dcv.domain}`
+              : '未启用：申请页的「DCV 托管」验证方式不可选'
+          }
+          description={
+            dcv?.available
+              ? '用户只需首次添加一次 CNAME，后续续期由平台自动维护验证记录。'
+              : '配置一个专用子域名后，用户首次添加一次 CNAME 即可自动续期，不必反复添加 TXT 记录。'
+          }
+        />
         {renderText('DCV_AGENT', 'DCV_AGENT', {
-          help: '用于 dns-auto 模式下的验证子域后缀',
-        })}
-        {renderText('DCV_EMAIL', 'DCV_EMAIL', {
-          help: 'Cloudflare 账户邮箱（X-Auth-Email）',
-        })}
-        {renderText('DCV_TOKEN', 'DCV_TOKEN', {
-          help: 'Cloudflare Global API Key / Key Token',
+          help: '用于 dns-auto 模式下的验证子域后缀，由上方设置向导自动填写',
         })}
         {renderText('DCV_ZONES', 'DCV_ZONES', {
-          help: '托管 DCV 子域的 Zone ID',
+          help: '托管 DCV 子域的 Zone ID，由设置向导自动识别',
+        })}
+        {renderText('DCV_EMAIL', 'DCV_EMAIL', {
+          help: '仅旧版 Global API Key 方式需要；使用 API Token 时留空',
+        })}
+        {renderText('DCV_TOKEN', 'DCV_TOKEN', {
+          help: '仅旧版 Global API Key 方式需要；使用 API Token 时留空',
         })}
       </Card>
+
+      <Modal
+        open={dcvOpen}
+        title="启用 DCV 托管"
+        onCancel={() => { if (!dcvBusy) setDcvOpen(false); }}
+        onOk={() => void saveDcv()}
+        confirmLoading={dcvBusy}
+        okText="启用"
+        cancelText="取消"
+        closable={!dcvBusy}
+        maskClosable={!dcvBusy}
+        cancelButtonProps={{ disabled: dcvBusy }}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="建议使用专用子域名（如 dcv.example.com）"
+          description="启用时会先在该子域名下写入并清理一条测试 TXT 记录，确认 Token 具备权限后才保存，不会影响其他记录。"
+        />
+        <Row align="middle" gutter={12} style={{ marginBottom: 12 }}>
+          <Col flex="120px">托管域名</Col>
+          <Col flex="auto">
+            <Input value={dcvDomain} onChange={(e) => setDcvDomain(e.target.value)} placeholder="dcv.example.com" maxLength={253} />
+          </Col>
+        </Row>
+        <Row align="middle" gutter={12} style={{ marginBottom: 12 }}>
+          <Col flex="120px">
+            API Token
+            <Tooltip title="Cloudflare 控制台 → 我的个人资料 → API 令牌 → 创建令牌 → 选择「编辑区域 DNS」模板；权限需包含 Zone Read（读取区域）与 DNS Edit（编辑 DNS）；资源限制到该子域名所在的区域。页面只显示一次 Token，请及时复制。">
+              <span style={{ marginLeft: 4, cursor: 'help' }}>?</span>
+            </Tooltip>
+          </Col>
+          <Col flex="auto">
+            <Input.Password value={dcvToken} onChange={(e) => setDcvToken(e.target.value)} placeholder={dcv?.available ? '留空则保留现有 Token' : '粘贴 Cloudflare DNS API Token'} autoComplete="new-password" />
+          </Col>
+        </Row>
+        {dcvError && <Alert type="error" showIcon style={{ marginBottom: 12 }} message={dcvError} />}
+        <Checkbox checked={dcvConfirm} onChange={(e) => setDcvConfirm(e.target.checked)}>
+          允许临时写入并清理 TXT 记录以验证权限
+        </Checkbox>
+      </Modal>
 
       {/* 证书提供商 · 三家 CA ==================================== */}
       <Card
@@ -542,7 +650,7 @@ export default function AdminSystemPage() {
         style={{ marginBottom: 16 }}
         extra={
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            *_KeyTS 为账户私钥 PEM，出于安全不回显明文，可覆盖保存
+            EAB 仅在首次注册账户时使用；*_KeyTS 留空时自动生成并保存，请勿更换
           </Typography.Text>
         }
       >
@@ -550,26 +658,37 @@ export default function AdminSystemPage() {
           Google Trust Services
         </Typography.Title>
         {renderBool('GTS_useIt', '启用 GTS', '关闭后前端隐藏该选项')}
-        {renderText('GTS_keyMC', 'GTS_keyMC（HMAC Key）')}
-        {renderText('GTS_keyID', 'GTS_keyID（EAB KID）')}
+        {renderText('GTS_keyMC', 'GTS_keyMC（HMAC Key）', {
+          help: 'Google 的 EAB 只能使用一次，且需在创建后 7 天内完成注册；账户注册成功后长期有效，无需再改',
+        })}
+        {renderText('GTS_keyID', 'GTS_keyID（EAB KID）', {
+          help: '仅在首次注册账户时需要；账户已注册后可留空',
+        })}
         {renderText('GTS_KeyTS', 'GTS_KeyTS（账户私钥 PEM）', {
           textarea: true,
+          help: '留空则自动生成；更换私钥会被视为新账户，需重新使用一份 EAB',
         })}
         <Divider />
         <Typography.Title level={5}>SSL.com</Typography.Title>
         {renderBool('SSL_useIt', '启用 SSL.com')}
-        {renderText('SSL_keyMC', 'SSL_keyMC（HMAC Key）')}
+        {renderText('SSL_keyMC', 'SSL_keyMC（HMAC Key）', {
+          help: 'EAB 可重复使用；账户注册后只需保留账户私钥',
+        })}
         {renderText('SSL_keyID', 'SSL_keyID（EAB KID）')}
         {renderText('SSL_KeyTS', 'SSL_KeyTS（账户私钥 PEM）', {
           textarea: true,
+          help: '留空则自动生成；更换私钥会被视为新账户',
         })}
         <Divider />
         <Typography.Title level={5}>ZeroSSL</Typography.Title>
         {renderBool('ZRO_useIt', '启用 ZeroSSL')}
-        {renderText('ZRO_keyMC', 'ZRO_keyMC（HMAC Key）')}
+        {renderText('ZRO_keyMC', 'ZRO_keyMC（HMAC Key）', {
+          help: 'EAB 可重复使用；账户注册后只需保留账户私钥',
+        })}
         {renderText('ZRO_keyID', 'ZRO_keyID（EAB KID）')}
         {renderText('ZRO_KeyTS', 'ZRO_KeyTS（账户私钥 PEM）', {
           textarea: true,
+          help: '留空则自动生成；更换私钥会被视为新账户',
         })}
       </Card>
 

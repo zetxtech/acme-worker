@@ -44,8 +44,8 @@ export default function ProtectedRoute({
   }, [requireAdmin, checked, loading, isLoggedIn, isAdmin, message]);
 
   // 首次检查尚未完成，显示 loading
-  if (!checked || loading) {
-    return <Loading full text="加载中" />;
+  if (!checked) {
+    return <Loading full overlay text="加载中" />;
   }
 
   if (!isLoggedIn) {
@@ -56,5 +56,5 @@ export default function ProtectedRoute({
     return <Navigate to="/panel" replace />;
   }
 
-  return <>{children}</>;
+  return <>{children}{loading && <Loading full overlay text="正在确认登录状态" />}</>;
 }

@@ -18,10 +18,12 @@ export default {
         return index.app.fetch(request, env, ctx);
     },
     async scheduled(controller: ScheduledController, env: index.Bindings, ctx: ExecutionContext) {
-        console.log('Cron job processed');
+        console.log('Cron job processed', controller.cron);
         try {
-            console.log(controller, ctx)
-
+            // 免费套餐每个账号仅允许 5 个 cron 触发器，若本 Worker 未占用配额，
+            // 可改用 /trigger/:name 端点由外部调度器驱动（见 src/automation.ts）。
+            const {runScheduled} = await import('./automation');
+            await runScheduled(env);
         } catch (error) {
             console.error('Error processing cron job:', error);
         }

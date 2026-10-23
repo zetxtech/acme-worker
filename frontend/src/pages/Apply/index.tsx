@@ -13,7 +13,6 @@ import {
   UserCheck,
 } from 'lucide-react';
 import PageShell from '@components/Layout/PageShell';
-import TerminalPrompt from '@components/molecules/TerminalPrompt';
 import Kaomoji from '@components/molecules/Kaomoji';
 import Pill from '@components/atoms/Pill';
 import CodeInline from '@components/atoms/CodeInline';
@@ -21,6 +20,8 @@ import CertCaptcha from '@components/molecules/CertCaptcha';
 import { applyCert, fetchApplyQuota } from '@api/order';
 import type { ApplyPayload, DomainItem } from '@api/types';
 import { useBootstrapStore } from '@stores/useBootstrapStore';
+import { useAuthStore } from '@stores/useAuthStore';
+import { fetchCapabilities, fetchResources, resourceSelectable, type CaCapability, type DcvState, type WorkflowResource } from '@api/resources';
 import {
   SIGN_MAP,
   SIGN_SHORT_MAP,
@@ -36,11 +37,13 @@ interface DomainRowForm {
   domain: string;
   wildcard: boolean;
   includeRoot: boolean;
-  verification: 'dns-self' | 'dns-auto' | 'web-self';
+  verification: 'dns-self' | 'dns-auto' | 'dns-api' | 'web-self';
+  dnsAccountId?: string;
   isIP: boolean;
 }
 
 interface FormState {
+  targetIds: string[];
   domains: DomainRowForm[];
   ca: string;
   auto_renew: boolean;
@@ -73,6 +76,11 @@ export default function Apply() {
   const navigate = useNavigate();
   const { message, modal } = App.useApp();
   const bootstrap = useBootstrapStore((s) => s.info);
+  const email = useAuthStore((s) => s.email);
+  const [capabilities, setCapabilities] = useState<CaCapability[]>([]);
+  const [dcv, setDcv] = useState<DcvState>();
+  const [dnsAccounts, setDnsAccounts] = useState<WorkflowResource[]>([]);
+  const [targets, setTargets] = useState<WorkflowResource[]>([]);
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
@@ -106,12 +114,24 @@ export default function Apply() {
   }, []);
 
   const [state, setState] = useState<FormState>({
+    targetIds: [],
     domains: [DEFAULT_DOMAIN()],
-    ca: 'google-trust',
+    ca: 'lets-encrypt',
     auto_renew: true,
     encryption: 'eccp256',
     subject: {},
   });
+
+  useEffect(() => {
+    Promise.all([fetchCapabilities(), fetchResources('dns'), fetchResources('targets')]).then(([cas, dns, deploy]) => {
+      setCapabilities(cas.cas);
+      setDcv(cas.dcv);
+      setDnsAccounts(dns.items);
+      setTargets(deploy.items);
+      setState((previous) => ({...previous, ca: cas.cas.find((item) => item.available && item.id === previous.ca)?.id
+        ?? cas.cas.find((item) => item.available)?.id ?? ''}));
+    }).catch(() => message.error('无法读取证书厂商和资源，请刷新后重试'));
+  }, []);
 
   const updateDomains = (domains: DomainRowForm[]) =>
     setState((s) => ({ ...s, domains }));
@@ -137,6 +157,9 @@ export default function Apply() {
   }, [state.domains]);
 
   const validDomains = previewDomains.length > 0;
+  const compatibleCapabilities = capabilities.map((item) => item.id === 'sslcom-trust'
+    && (previewDomains.length > 1 || previewDomains.some((name) => name.startsWith('*.')) || state.domains.some((item) => item.isIP))
+    ? {...item, available: false, reason: 'incompatible_product'} : item);
 
   const validateStep = (idx: number): boolean => {
     if (idx === 0) {
@@ -148,6 +171,10 @@ export default function Apply() {
       const DOMAIN_RE = /^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i;
       const IP_RE = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$/;
       for (const d of state.domains) {
+        if (d.verification === 'dns-auto' && !dcv?.available) {
+          message.error('DCV 托管暂未启用，请选择其他验证方式');
+          return false;
+        }
         const v = (d.domain || '').trim();
         if (!v) {
           message.error('存在空的域名输入');
@@ -160,6 +187,10 @@ export default function Apply() {
           }
         } else if (!DOMAIN_RE.test(v)) {
           message.error(`域名格式非法："${v}"（不能包含空格/中文/特殊字符）`);
+          return false;
+        }
+        if (d.verification === 'dns-api' && !dnsAccounts.some((account) => account.id === d.dnsAccountId && resourceSelectable(account, email, [d.domain]))) {
+          message.error('请选择适用于该域名的 DNS 账户');
           return false;
         }
       }
@@ -178,6 +209,12 @@ export default function Apply() {
 
   const handleSubmit = async () => {
     if (!validateStep(0)) return;
+    if (!compatibleCapabilities.some((item) => item.id === state.ca && item.available)) {
+      message.error('请选择当前可用且适合此申请的证书厂商'); return;
+    }
+    if (state.targetIds.some((id) => !targets.some((target) => target.id === id && resourceSelectable(target, email, previewDomains)))) {
+      message.error('所选部署目标不适用于当前域名，请重新选择'); return;
+    }
     // captcha 必填校验 ----------------------------------
     if (captchaEnabled && !captchaToken) {
       message.warning('请先完成人机验证');
@@ -223,6 +260,7 @@ export default function Apply() {
               wild: false,
               root: d.includeRoot,
               type: d.verification,
+              dnsAccountId: d.verification === 'dns-api' ? d.dnsAccountId : undefined,
             });
           }
           if (d.wildcard) {
@@ -231,12 +269,14 @@ export default function Apply() {
               wild: true,
               root: d.includeRoot,
               type: d.verification,
+              dnsAccountId: d.verification === 'dns-api' ? d.dnsAccountId : undefined,
             });
           }
         }
       }
 
       const payload: ApplyPayload = {
+        targetIds: state.targetIds,
         domains: domainList,
         globals: {
           ca: state.ca,
@@ -298,14 +338,6 @@ export default function Apply() {
 
   return (
     <PageShell>
-      <div className={styles.greet}>
-        <TerminalPrompt
-          host="certhub"
-          path="~/apply"
-          suffix={<span className={styles.cmdText}>new cert</span>}
-        />
-      </div>
-
       {/* 步骤指示器 */}
       <div className={styles.steps}>
         {STEPS.map((s, i) => (
@@ -319,6 +351,8 @@ export default function Apply() {
             ]
               .filter(Boolean)
               .join(' ')}
+            disabled={i > step}
+            aria-current={i === step ? 'step' : undefined}
             onClick={() => i <= step && setStep(i)}
           >
             <span className={styles.stepIcon}>
@@ -343,6 +377,8 @@ export default function Apply() {
             >
               {step === 0 && (
                 <DomainSection
+                  dcv={dcv}
+                  dnsAccounts={dnsAccounts.filter((account) => resourceSelectable(account, email))}
                   domains={state.domains}
                   onChange={updateDomains}
                   defaultRow={DEFAULT_DOMAIN}
@@ -350,6 +386,9 @@ export default function Apply() {
               )}
               {step === 1 && (
                 <GlobalSection
+                  capabilities={compatibleCapabilities}
+                  targets={targets.filter((target) => resourceSelectable(target, email, previewDomains))}
+                  targetIds={state.targetIds}
                   ca={state.ca}
                   autoRenew={state.auto_renew}
                   encryption={state.encryption}

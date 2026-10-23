@@ -5,6 +5,7 @@ import styles from './Loading.module.css';
 export interface LoadingProps {
   text?: string;
   full?: boolean;
+  overlay?: boolean;
   size?: 'sm' | 'md' | 'lg';
   className?: string;
   style?: CSSProperties;
@@ -16,6 +17,7 @@ export interface LoadingProps {
 export default function Loading({
   text = '加载中',
   full = false,
+  overlay = false,
   size = 'md',
   className,
   style,
@@ -24,7 +26,10 @@ export default function Loading({
 
   return (
     <div
-      className={[styles.wrap, full && styles.full, className]
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      className={[styles.wrap, full && styles.full, overlay && styles.overlay, className]
         .filter(Boolean)
         .join(' ')}
       style={style}

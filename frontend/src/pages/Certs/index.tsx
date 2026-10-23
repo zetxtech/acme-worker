@@ -22,7 +22,6 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import PageShell from '@components/Layout/PageShell';
 import SectionHeader from '@components/Layout/SectionHeader';
-import TerminalPrompt from '@components/molecules/TerminalPrompt';
 import EmptyState from '@components/molecules/EmptyState';
 import StatusPulse from '@components/molecules/StatusPulse';
 import ConfirmIdContent from '@components/molecules/ConfirmIdContent';
@@ -145,7 +144,7 @@ export default function Certs() {
 
   const handleDownload = async (uuid: string, type: 'cert' | 'key') => {
     try {
-      const content = await operateOrder(
+      const { value: content } = await operateOrder(
         uuid,
         type === 'cert' ? 'ca_get' : 'ca_key',
       );
@@ -265,15 +264,6 @@ export default function Certs() {
 
   return (
     <PageShell>
-      {/* 终端提示 */}
-      <div className={styles.greet}>
-        <TerminalPrompt
-          host="certhub"
-          path="~/certs"
-          suffix={<span className={styles.cmdText}>ls -la</span>}
-        />
-      </div>
-
       {/* 标题 + 操作 */}
       <SectionHeader
         icon={<FileStack size={18} />}

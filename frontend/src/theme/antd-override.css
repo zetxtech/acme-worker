@@ -482,3 +482,94 @@
   border-top: 1px solid var(--line-soft) !important;
   color: var(--text-1) !important;
 }
+
+/* ---------- 图标对齐（卡片标题 / 标签 / 提示框）----------
+ * 图标组件与中英文文本混排时基线不一致，统一改为居中弹性对齐。
+ */
+.ant-card-head-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ant-card-head-title > svg,
+.ant-card-head-wrapper > svg {
+  flex-shrink: 0;
+  display: block;
+}
+
+.ant-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 20px;
+}
+
+.ant-tag > svg,
+.ant-tag .anticon {
+  display: block;
+  flex-shrink: 0;
+}
+
+.ant-alert-with-description .ant-alert-message {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ant-alert-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.ant-alert-message > svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* ---------- Tooltip ---------- */
+.ant-tooltip .ant-tooltip-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 4px 10px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.ant-tooltip .ant-tooltip-inner > svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* ---------- 工具栏：统一高度与阴影 ---------- */
+.toolbarRow .ant-input,
+.toolbarRow .ant-input-affix-wrapper,
+.toolbarRow .ant-select .ant-select-selector,
+.toolbarRow .ant-radio-button-wrapper,
+.toolbarRow .ant-btn {
+  height: 36px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  box-shadow: 0 1px 2px rgba(15, 118, 110, 0.08) !important;
+}
+
+.toolbarRow .ant-radio-button-wrapper {
+  line-height: 34px !important;
+}
+
+.toolbarRow .ant-btn-primary {
+  box-shadow: 0 1px 2px rgba(15, 118, 110, 0.08) !important;
+}
+
+.toolbarRow .ant-btn-primary:hover:not(:disabled) {
+  box-shadow: 0 2px 8px var(--brand-glow) !important;
+}
+
+.toolbarRow .ant-btn:not(.ant-btn-circle):not(.ant-btn-icon-only) {
+  padding-inline: 16px;
+}

@@ -22,6 +22,15 @@
   gap: 12px;
 }
 
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: color-mix(in srgb, var(--bg-base) 68%, transparent);
+  background-image: none;
+  backdrop-filter: blur(2px);
+}
+
 .kaomoji {
   color: var(--brand);
   animation: float 2s ease-in-out infinite;

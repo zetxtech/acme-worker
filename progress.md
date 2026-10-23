@@ -1,0 +1,106 @@
+# Progress
+
+## CA Account Reuse And One-Time EAB: 2026-10-23
+- Reported problem: Google Public CA credentials appeared to expire and had to be re-entered by hand. Verified against primary sources: Google's EAB secret is single-use and is invalidated if unused within 7 days, but the ACME account it registers has no expiry; ZeroSSL has made EAB credentials reusable since March 2022; SSL.com and ZeroSSL bind to the account key, not to the EAB.
+- Root cause in this codebase: CA availability demanded EAB plus an admin-supplied account key at all times, and the account identity is derived from the key. Any key change (including a re-pasted PEM) produced a new identity, so a fresh registration consumed a fresh EAB.
+- caCapabilities now resolves registration state: it reads the configured or auto-stored account key, hashes it with each CA directory URL exactly as the client does, and treats the CA as available when either the account is registered or EAB is present. Registered CAs report missing=[] so a spent or absent EAB no longer disables them. New fields registered/eabConfigured/needsRegistration drive messaging.
+- registeredClient normalizes the account key before hashing, does not send externalAccountBinding when the account already exists, and wraps registration failures with the one-time-EAB guidance. A trailing-newline difference caused by storage was found to change the identity and would have re-registered the account; trimming on both write and read removes it.
+- resolveAccountKey auto-generates a P-256 account key for Google/ZeroSSL/SSL.com when none is configured, persists it under ACME_KEY:<sign>, and prefers an explicitly configured key. Admin UI explains that *_KeyTS may be left empty, must not be replaced, and that Google's EAB is one-time with a 7-day window.
+- Live state: no CA credentials are configured in production yet; the only ACME account record belongs to a user-level Let's Encrypt account, which is expected. Configuring Google once is now sufficient.
+- Tests: 35/35 passed with zero skipped (CA registration matrix, key generation/reuse, EAB suppression and failure guidance, DCV gating, resources, deployment, workerd SSH, desktop/mobile Chrome). Deployed acme version 07bc5726-6849-4b47-b245-47275abd3006; online homepage/entry 200, bootstrap healthy, anonymous capabilities 401, 31 bindings and AUTOMATION_KEY retained.
+
+## DCV Gating And Navigation Split: 2026-10-22
+- Reported symptom: an order was created and then failed with "Administrator DCV zone is not configured". Root cause: dns-auto delegation used global DCV_AGENT/DCV_ZONES credentials that were empty, and neither the apply UI nor the two order-creation endpoints checked availability before creating the order.
+- Added dcvCapability/assertDcvAvailable: availability requires a valid delegation domain, a 32-hex Cloudflare zone id and supported authentication (encrypted DCV token, DCV_API_TOKEN, or legacy email+key). /capabilities now returns the DCV state (missing fields only for administrators), and both /apply/ and /api/v1/orders reject dns-auto before inserting an order. The apply page disables the option with an explanatory tooltip instead of failing after submission.
+- DCV delegation now supports Bearer API Tokens. Tokens entered through the new setup flow are sealed with AUTOMATION_KEY under the DCV_AUTH identity; the legacy global-key path is retained. Cloudflare DNS calls gained a bounded timeout and redirect refusal, and failures no longer return an empty object that crashes callers.
+- Added an administrator "启用 DCV 托管" entry on the domain-resources page: it verifies the token by writing and cleaning one owned TXT record under the chosen delegation subdomain, then stores the zone id and domain. Failure returns an actionable message instead of a partial configuration. DCV remains unavailable in production until a DNS-scoped token is supplied; the current operator token can read the zone but is denied DNS record and token-management operations.
+- Split navigation into 域名资源 (/domains) and 部署目标 (/deployments); /resources redirects to /domains. Resource page now takes kind from the route instead of tabs. Fixed duplicate Ant Design form ids (two forms both using a `domain` field) that made labels resolve to hidden inputs.
+- Tests: DCV capability unit test added; full suite passed 33/33 with zero skipped including workerd SSH/SFTP and desktop/mobile Chrome, covering DCV disabled-by-default, setup request payload and post-setup enabled state. A non-retrying count assertion was converted to a retrying locator after it raced the table refresh.
+- Deployed acme version 95c8c593-f48e-47a0-81ef-f37515cc53fa. Online: homepage and new entry 200, bootstrap initialized/healthy, anonymous /resources/dns/providers, /capabilities and PUT /resources/dcv all 401, 31 lego service bindings and AUTOMATION_KEY retained. Temporary test Vite and SSH Workers stopped.
+
+## Latest UX Production Release: 2026-10-22
+- Deployed acme main version d2c49ea6-e70d-4fe5-9fa4-d05d06bd946b to https://acme.zetx.tech/. Existing database, encryption secret and all 31 lego service bindings were retained; no Go shard source changed.
+- Root cause of navigation flicker: route-keyed Routes and outer Suspense replaced the entire authenticated layout. The layout is now shared across regular/admin routes, with lazy-page Suspense inside its outlet and a translucent loading overlay. Background authentication refresh retains authenticated content.
+- Removed duplicate page-body terminal prompts from Panel, Certs, Account and Order. The top bar owns route-specific commands and greeting; order action buttons remain. Compact header wraps within its bounds.
+- Private DNS accounts support explicit owner-only account scope without manual zones. Shared/target scopes remain restricted. Native DNS operations, frontend selection and lego invocation all preserve the policy; automatic lego requests receive explicit per-operation domains.
+- Provider choices show vendor names rather than per-vendor account verification warnings. Optional domain restrictions and sharing are collapsed under advanced settings. Checks ask for a real domain and explicit confirmation before lego TXT writes. Existing scoped resources are not broadened.
+- Fixed transient encryption false warnings, stale-tab response races, silent application-level save failures, stale provider form fields, overly long field labels, missing new SSH authentication validation, and free-text tag dropdowns obstructing Save.
+- Regression initially exposed the Collapse icon's accessible-name pollution and free-text tag popup obstruction; both fixed. Keyboard dropdown interaction is tested without force-click bypasses.
+- Complete certificate-workflow suite passed 32/32 with zero skipped, including workerd SSH/SFTP, scope/security checks and desktop/mobile Chrome. Additional screenshot run passed, confirming one terminal prompt and the same sidebar DOM node under delayed lazy-page loading. Production frontend build and editor diagnostics passed.
+- Direct screenshots: _artifacts/certificate-workflow/desktop-panel-ux.png and desktop-overlay-ux.png. Visual tools confirmed a single greeting and an overlay retaining navigation. Temporary test Vite and SSH Workers were stopped afterward.
+- Online checks: homepage and new /assets/index-BGj9nyzj.js return 200, bootstrap reports initialized/healthy, anonymous resources remain 401, AUTOMATION_KEY present. Shared browser is unauthenticated and reaches login, so authenticated production UI interaction is not claimed. No real DNS, CA or user-host side effects were used for acceptance.
+
+## Latest Production Release: 2026-10-22
+- Resumed interrupted deployment from 19 existing shards. Recovered checkpoints only after remote runtime version, source/build hashes and provider lists matched.
+- All 31 shards deployed and connected to the existing acme Worker. Main version: 97c95ead-32e9-46e7-bdbf-1db24ec17727. Live origin: https://acme.zetx.tech/ (also https://acme.jackkkkz.workers.dev/).
+- Current upstream: lego v5.5.2, 223 catalog providers, 212 compiled providers, 11 explicitly incompatible. Five adapter families passed complete local workerd fixture lifecycles; other built adapters require revision-bound account validation. No claim of 212 real-account issuance tests.
+- Provider sync/runtime suite passed 37 tests with no failures/skips before the deployment-only fixes; final targeted sync/publish suite passed 8/8 with no skips, covering restored checkpoints, Windows config-relative paths and safe ordinary deployment. Final providers:check reported zero additions/removals/changes.
+- Repaired Windows legacy asset-path concatenation in generated release configuration; the first main upload failed without changing the main Worker, then the fixed deployment succeeded.
+- Remote verification: 31 shard scripts, 31 main service bindings, no temporary verification Workers, AUTOMATION_KEY retained, unchanged DB_CF database ID 12ee503a-73d2-454a-940f-f5723037e1d2, healthy initialized database. Sampled shard workers.dev and preview URLs are disabled.
+- Public homepage and current static JS entry return 200; anonymous provider catalog returns 401. Integrated browser access to workers.dev timed out. The actual custom domain acme.zetx.tech loaded successfully and redirected the unauthenticated session to its working login form; authenticated resource UI inspection is not claimed.
+- Standard deploy-cf now uses the verified provider publisher, preventing later routine deployments from dropping service bindings. No WSL, external backend, plan upgrade, credential rotation or DNS record writes occurred in this release.
+
+## Earlier Implementation History
+
+- New user request: expand DNS provider support from Cloudflare/DNSPod/Alibaba to lego/acme-go scale and make upstream updates convenient.
+- Source inventory: lego v5.5.2 source contains 223 DNS provider implementation packages; v5.5.2 go.mod requires Go 1.26 while local Go is 1.25.3.
+- Go/WASM full v4.35.2 registry compiled successfully to 125,783,961 bytes, exceeding Worker's 64 MiB single-script bundle ceiling. A 7-provider build is 31,460,929 bytes, suggesting shards may be feasible.
+- workerd probe passed Go WASM boot, syscall/js, fixture Cloudflare provider constructor and Go net/http GET (HTTP 200). Go wasm_exec needed a local process identity shim because workerd's process lacks getuid().
+- End-to-end provider probe then confirmed lego DNS zone discovery fails on raw UDP in Workers (SOA query reset by peer) before any provider API write. No real DNS credentials or target were used.
+- Provider instance state is material: Cloudflare lego stores record IDs in-memory between Present and CleanUp, so a stateless per-operation service binding is not safe. Any compatible design must keep the full ACME operation/provider lifecycle together or durably reconstruct state.
+- Current next step: hand the user-authorized provider expansion to Work with this concrete architecture and acceptance evidence; do not expose metadata-only provider entries as supported.
+- Main-thread final verification: reran the complete acceptance suite with SSH_WORKER_SMOKE_URL=http://127.0.0.1:8795 and WORKFLOW_UI_URL=http://127.0.0.1:5194. Result: 28 passed, 0 failed, 0 skipped, including actual local workerd SFTP and Chrome UI tests.
+- Main-thread diagnostics found no errors in the new CA, DNS, resource, deployment and deployment-helper modules. Screenshot inspection and mobile label-bound checks did not confirm clipping.
+- Stopped the temporary SSH smoke Worker after verification. Kept the main local UI/Worker running; the real local application remains uninitialized and no administrator was created.
+- No production deployment was performed. AUTOMATION_KEY and real provider/host acceptance remain operator configuration and live verification requirements. Unattributed preexisting local dependency changes were not reverted.
+- Started Worker-only implementation on 2026-10-21.
+- Recorded existing dirty worktree; existing changes will be preserved.
+- First focused check: CA availability must follow configuration rather than static UI options.
+- Implemented CA capability metadata and three focused tests; all passed through tsx --test.
+- Paused further implementation on the user's updated instruction.
+- Completed the Worker-only implementation plan and acceptance criteria for Work handoff.
+- Resumed authorized execution on 2026-10-21; read all three planning files in full.
+- Preserved the initial dirty worktree; no deployment or remote D1 operation performed.
+- Connected CA capabilities to the authenticated endpoint and both order creation paths.
+- Focused tests: 4/4 passed, including wildcard/apex expansion and SSL.com free product rejection.
+- Installed ssh2 with npm lockfile consistency; optional native addons and install scripts disabled.
+- Added an isolated local Worker SSH initialization/crypto probe; runtime verification pending.
+- Backend tsc baseline is nonzero; do not treat repository-wide type errors as introduced by this task.
+- Implemented encrypted independent DNS/target resources, grants/scopes, masked CRUD and connection-test endpoints.
+- Implemented Cloudflare Token, DNSPod TC3 and Alibaba DNS ACS3 provider requests, exact record handles and dual-resolver TXT checks.
+- Wired DNS API selection into persistent order stages, retry backoff and precise cleanup; removed hardcoded legacy DCV suffix.
+- Persisted ACME account registration URLs while retaining existing global/private account keys.
+- Implemented HTTPS authenticated/HMAC hooks, bounded responses and public destination checks.
+- Implemented ssh2 SFTP PEM/PFX deployment, backup/recovery, Nginx test/reload and Traefik dynamic PEM/acme.json merge with remote lock.
+- Implemented per-order target selection/state/version/config hashes, D1 atomic execution leases and retries; issuance and scheduler now call selected deployments separately from legacy global edge targets.
+- Focused tests: 17/17 passed after backend slices. These use mocked provider/remote filesystem operations, not live DNS or authenticated SSH targets.
+- Real local workerd smoke: Client/ECDH/AES-GCM/key generation+parsing all ok. Public GitHub SSH host fingerprint verified; AES-GCM SSH decrypt failed with "No auth tag provided", while AES-CTR+SHA256 completed handshake and reached expected no-credentials authentication failure.
+- Local tooling fixes: npm --omit=optional removed workerd platform binary; restored optional deps. VS Code task shell commands did not execute correctly; used native background terminal. Future compatibility date was rejected; isolated runtime uses 2026-01-01. No errors were sent to Cloudflare.
+- Added authenticated Resources UI, dynamic CA availability/Popover/default, per-domain DNS selection, multi-target Apply payload and Order deployment status/retry/selection controls; frontend typecheck passed.
+- Full main Worker Wrangler dry-run passed (about 4.44 MiB uncompressed / 850 KiB gzip), retaining workacme-db / DB_CF. Nothing uploaded.
+- Added real Hono route tests backed only by process-memory SQLite, atomic D1 lease tests, DNSPod/Alibaba signature/payload tests, delegation pattern checks and persisted challenge polling regression tests.
+- Full offline suite: 23/23 passed. Explicit workerd authentication/SFTP test: 1/1 passed, including password/private key, file mode, rollback and fingerprint rejection.
+- Actual production DNS APIs, certificate issuance and user-host deployment remain untested because no credentials/targets were supplied or read.
+
+## Final Local Acceptance
+- Final run: tests/certificate-workflow.test.ts passed 27/27, failed 0, skipped 0 with SSH_WORKER_SMOKE_URL and WORKFLOW_UI_URL explicitly set.
+- Actual workerd exercised password/private-key authentication, pinned-host rejection, SFTP staging/backups/rollback, PEM/PFX, file modes, Nginx command-failure recovery, Traefik dynamic PEM/acme.json, shared locks and concurrent-file-change protection. The temporary peer was a Windows in-memory SSH/SFTP protocol fixture and closed after each test.
+- Independent system Chrome exercised actual local frontend code with synthetic API fixtures: CA default/disabled explanations, per-domain account, multi-target request payload, failed-target retry, resource create/edit/masked fields and locked encryption state. Desktop/mobile screenshots are under _artifacts/certificate-workflow/ and ignored by git.
+- Fixed defects exposed by acceptance: hidden-radio test selector; resource first-open default loss; quoted manual TXT comparison; validated-domain regression after cleanup; duplicate challenge submission; cleanup retry without legacy zone; mobile verification-label clipping; unsafe remote parse-error detail; shared Traefik lock and personal EdgeOne host coverage.
+- Final frontend build passed (tsc --noEmit + Vite). Final main Wrangler deploy --dry-run passed: 4450.13 KiB upload / 852.12 KiB gzip. Isolated SSH Worker dry-run also passed. No upload/deployment occurred.
+- Root all-repository tsc remains nonzero (sampling 2186 diagnostics, including the existing cross-frontend Hono JSX/configuration baseline); newly added Worker-module sampling had 0 diagnostics. No unrelated type cleanup performed.
+- git diff --check passed before final documentation update; original dirty files and all unrelated work were retained. No commit, branch change, WSL, Containers or remote D1/DNS/SSH write.
+- Local frontend: http://127.0.0.1:5194/. Main Worker: http://127.0.0.1:8794/. Verified frontend 200, anonymous capability endpoint 401, local D1 ready=true, initialized=false. No administrator account initialized.
+- Production acceptance remains pending: real DNS edit permissions/propagation/cleanup, actual CA issuance and SSL.com account product, user-owned SSH hosts and real Nginx/Traefik reloads, HTTPS receiver/EdgeOne/ESA effects and production runtime quotas. Missing credentials blocked live tests, not implementation. AUTOMATION_KEY must be configured privately before saving real resources.
+
+## Pre-Handoff Local Recheck (2026-10-21)
+- Scope: only the selected-deployment pagination defect, unrelated dependency provenance and local acceptance recheck. No production operation, WSL, database deletion, branch change or commit.
+- Root cause: syncSelectedOrders only read the newest 100 flag=5 orders. Successful deployments leave those orders in that result set, permanently hiding older selected targets.
+- Changed src/deployment.ts to scan subsequent 100-order pages until the order set ends or the existing shared four-target execution budget is exhausted. Target authorization, D1 leases, retry backoff, version/config idempotency and legacy edge synchronization were not changed.
+- Added one regression in tests/certificate-workflow.test.ts using process-memory D1 and synthetic HTTPS responses: 105 two-target orders, first 100 already successful, an older failed order ready for retry, and the oldest selected targets. Execution counts across successive scans are 4, 4, 2, 0; all ten older targets complete exactly once and failed-target attempts advance correctly.
+- Red/green evidence: the regression failed on the old implementation with 0 executions instead of 4; immediately after the fix both selected-deployment tests passed (2/2, 0 skipped). Editor diagnostics for both touched code/test files reported no errors.
+- Full file rerun: 28/28 passed, failed 0, skipped 0. Explicit SSH_WORKER_SMOKE_URL=http://127.0.0.1:8795 and WORKFLOW_UI_URL=http://127.0.0.1:5194 enabled actual local workerd SSH/SFTP and desktop/mobile Chrome tests. Only synthetic API/SSH fixtures and generated test keys were used; no real credentials were read.
+- Frontend build passed again (tsc --noEmit + Vite). Actual main Wrangler deploy --dry-run passed: 4450.26 KiB / gzip 852.15 KiB, preserving DB_CF / workacme-db. No upload or deployment occurred.
+- Dependency provenance remains unresolved, so package.json and package-lock.json were deliberately left unchanged. The retained npm logs show npm --prefix <CFWorkerACME> install --save-dev @types/ssh2 --ignore-scripts at 2026-10-20T18:43:24Z and the equivalent playwright-core install at 19:13:15Z, both launched from Clawer_Software. Both logs already include clawer-software in the audit tree, but neither records its introduction. Available indexed session history did not establish the first introducing command; concurrent user modification cannot be excluded.
+- The existing SSH task failed with a PowerShell parsing error and the old 8793 endpoint returned 502. A separate local-only 8795 probe was started for the full test run, then stopped after success. Main Worker 8794 and UI 5194 were retained for the user's final inspection; both returned HTTP 200 before the rerun. No application account was initialized.
+- This recheck intentionally does not claim production DNS/CA/user-host acceptance or a clean repository-wide TypeScript baseline.

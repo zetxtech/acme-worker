@@ -263,7 +263,8 @@ export default function ApiDocPage() {
             {
               title: '',
               key: 'curl',
-              width: 120,
+              width: 130,
+              align: 'center',
               render: (_v, r) => (
                 <Button
                   size="small"
@@ -288,7 +289,7 @@ export default function ApiDocPage() {
             {
               title: 'code',
               dataIndex: 'code',
-              width: 200,
+              width: 260,
               render: (v) => <Text code>{v}</Text>,
             },
             { title: 'HTTP', dataIndex: 'status', width: 80 },

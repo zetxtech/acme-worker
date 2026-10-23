@@ -58,3 +58,25 @@
 .iconBtn:active {
   transform: scale(0.94);
 }
+
+@media (max-width: 640px) {
+  .topbar {
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .left {
+    gap: 8px;
+  }
+
+  .right {
+    gap: 4px;
+  }
+
+  .menuBtn,
+  .iconBtn {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+  }
+}

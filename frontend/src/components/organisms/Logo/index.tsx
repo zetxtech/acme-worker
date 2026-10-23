@@ -22,8 +22,8 @@ export default function Logo({ size = 36, className, style }: LogoProps) {
     >
       <defs>
         <linearGradient id="chLogoBg" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="var(--brand)" />
-          <stop offset="100%" stopColor="var(--brand-ink)" />
+          <stop offset="0%" stopColor="#3ad4b3" />
+          <stop offset="100%" stopColor="#0f766e" />
         </linearGradient>
       </defs>
       {/* 圆角方块背景 */}
@@ -36,8 +36,8 @@ export default function Logo({ size = 36, className, style }: LogoProps) {
         fill="url(#chLogoBg)"
       />
       {/* 三色圆点 */}
-      <circle cx="14" cy="18" r="2.4" fill="var(--accent)" />
-      <circle cx="22" cy="18" r="2.4" fill="var(--lemon)" />
+      <circle cx="14" cy="18" r="2.4" fill="#ff7a59" />
+      <circle cx="22" cy="18" r="2.4" fill="#ffd166" />
       <circle cx="30" cy="18" r="2.4" fill="#FFFFFF" opacity="0.85" />
       {/* 锁 */}
       <g transform="translate(22 28)">
@@ -49,8 +49,8 @@ export default function Logo({ size = 36, className, style }: LogoProps) {
           strokeWidth="2.5"
           strokeLinecap="round"
         />
-        <circle cx="10" cy="15" r="1.6" fill="var(--brand-ink)" />
-        <rect x="9" y="15" width="2" height="4" fill="var(--brand-ink)" rx="0.8" />
+        <circle cx="10" cy="15" r="1.6" fill="#0f766e" />
+        <rect x="9" y="15" width="2" height="4" fill="#0f766e" rx="0.8" />
       </g>
     </svg>
   );

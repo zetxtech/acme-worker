@@ -1,0 +1,9 @@
+{
+    "name": "cfworker-acme-local-ssh-smoke",
+    "main": "ssh-runtime-worker.ts",
+    "compatibility_date": "2026-01-01",
+    "compatibility_flags": ["nodejs_compat"],
+    "alias": {"cpu-features": "../src/deploy/cpu-features.cjs"},
+    "define": {"__dirname": "\"/\""},
+    "workers_dev": false
+}

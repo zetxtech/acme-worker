@@ -156,6 +156,12 @@ export class D1Dao implements Dao {
         await this.db.prepare("DELETE FROM Apply WHERE uuid = ?").bind(uuid).run();
     }
 
+    async updateApplyListIfUnchanged(uuid: string, previous: string, next: string): Promise<boolean> {
+        const result = await this.db.prepare("UPDATE Apply SET list = ? WHERE uuid = ? AND list = ?")
+            .bind(next, uuid, previous).run();
+        return Number(result.meta?.changes ?? 0) > 0;
+    }
+
     async deleteAppliesByMail(mail: string): Promise<number> {
         const r = await this.db.prepare("DELETE FROM Apply WHERE mail = ?").bind(mail).run();
         return Number(r.meta?.changes ?? 0);
@@ -177,6 +183,16 @@ export class D1Dao implements Dao {
     }
 
     /* -------------------- Confs -------------------- */
+    async claimConfLease(name: string, token: string, expiresAt: number, now: number): Promise<boolean> {
+        const result = await this.db.prepare("INSERT INTO Confs(name, data, time) VALUES(?, ?, ?) ON CONFLICT(name) DO UPDATE SET data=excluded.data, time=excluded.time WHERE Confs.time <= ?")
+            .bind(name, token, expiresAt, now).run();
+        return Number(result.meta?.changes ?? 0) > 0;
+    }
+
+    async releaseConfLease(name: string, token: string): Promise<void> {
+        await this.db.prepare("DELETE FROM Confs WHERE name = ? AND data = ?").bind(name, token).run();
+    }
+
     async getConf(name: string): Promise<string | null> {
         const row = await this.db.prepare("SELECT data FROM Confs WHERE name = ?")
             .bind(name).first<{ data: string | null }>();

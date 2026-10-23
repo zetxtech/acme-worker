@@ -8,6 +8,9 @@ import {Bindings} from './index'
 import {hmacSHA2} from "./users";
 import {errors} from "wrangler";
 import {readConf} from "./db/conf";
+import {ensureDao} from "./db";
+import {authorizedResource, unseal} from "./resources";
+import {delegationTarget, DnsProvider, txtPropagated} from "./dns";
 
 
 const acme_url_map: Record<string, any> = {
@@ -97,6 +100,7 @@ export function extractAcmeError(e: any): string {
 
 // 整体处理进程 ====================================================================================
 export async function Processing(env: Bindings) {
+    await query.retryDnsCleanup(env).catch(() => 0);
     let order_list: any = await saves.selectDB(env.DB_CF, "Apply", {flag: {value: 5, op: "!="}});
     let result: any[] = []
     for (const id in order_list) { // 获取信息 ==================================================================
@@ -149,12 +153,13 @@ export async function processOne(env: Bindings, order_uuid: string) {
             env.DB_CF, "Apply", {uuid: {value: order_uuid}}))[0];
         if (!order_info) break;
         let flag = Number(order_info['flag']);
-        if (flag === 2 || flag === 5 || flag < 0) break; // 终止条件
+        if (flag === 5 || flag < 0) break; // 终止条件
         let order_user: any = (await saves.selectDB(
             env.DB_CF, "Users", {mail: {value: order_info['mail']}}))[0];
         try {
             if (flag === 0) result.push(await newApply(env, order_user, order_info));
             else if (flag === 1) result.push(await setApply(env, order_user, order_info));
+            else if (flag === 2) result.push(await opDomain(env, order_user, order_info, []));
             else if (flag === 3) result.push(await dnsAuthy(env, order_user, order_info));
             else if (flag === 4) result.push(await getCerts(env, order_user, order_info));
             else break; // 其它未知状态，停止推进
@@ -175,6 +180,7 @@ export async function processOne(env: Bindings, order_uuid: string) {
         // 若本轮处理后 flag 未推进，防止死循环
         let next_info: any = (await saves.selectDB(
             env.DB_CF, "Apply", {uuid: {value: order_uuid}}))[0];
+        if (flag === 1 || flag === 2 || flag === 3) break;
         if (!next_info || Number(next_info['flag']) === flag) break;
     }
     return result;
@@ -217,21 +223,22 @@ export async function newApply(env: Bindings, order_user: any, order_info: any) 
 
 // 自动验证代理 =====================================================================================
 export async function setApply(env: Bindings, order_user: any, order_info: any) {
+    if (await (await import("./lego/dispatch")).issueLegoOrder(env, order_user, order_info)) {
+        const fresh = await (await ensureDao(env)).getApply(order_info.uuid);
+        if (fresh && Number(fresh.flag) === 4) return getCerts(env, order_user, fresh);
+        return {texts: fresh?.text ?? "DNS issuance is in progress"};
+    }
     let domain_list: any = order_info['list'];
     let orders_text: any = JSON.parse(order_info['data'])
     let client_data: any = await getStart(env, order_user, order_info);
     let orders_data: any = await client_data.getOrder(orders_text); // 获取授权信息
     // console.log(domain_list, orders_data);
     // 执行验证部分 ================================================================================
-    let author_save: Record<string, Record<string, any>> = await getAuthy(client_data, orders_data)
+    let author_save: Record<string, Record<string, any>> = await getAuthy(client_data, orders_data, JSON.parse(domain_list))
     let domain_save: any[] = []
     let domain_flag: number = 2
     let domain_text: string = ""
-    for (let domain_item of JSON.parse(domain_list)) {
-        if (domain_item['type'] == "dns-auto") {
-            await agent.dnsDel(env, domain_item['auto']); // 删除原来
-        }
-    }
+    let presented = 0;
     for (let domain_item of JSON.parse(domain_list)) {
         let domain_name = domain_item.name;
         // if (domain_item.wild) domain_name = "*." + domain_name
@@ -246,7 +253,14 @@ export async function setApply(env: Bindings, order_user: any, order_info: any) 
             continue;
         }
         // console.log(author_save);
-        domain_item['auth'] = author_save[domain_name]['text'];
+        const challengeText = author_save[domain_name]['text'];
+        if (domain_item.auth !== challengeText) {
+            if (domain_item.dnsHandle || domain_item.legacyRecordId) await cleanupDomainDns(env, order_user.mail, domain_item);
+            delete domain_item.dnsHandle;
+            delete domain_item.legacyRecordId;
+            delete domain_item.challengeSubmitted;
+        }
+        domain_item['auth'] = challengeText;
         // 对于http-01验证（web-self），额外保存token用于前端展示验证路径
         if (author_save[domain_name]['data']?.type === 'http-01') {
             domain_item['token'] = author_save[domain_name]['data']['token'];
@@ -255,11 +269,13 @@ export async function setApply(env: Bindings, order_user: any, order_info: any) 
         if (domain_item['type'] == "dns-auto") {
             let domain_auto = await hmacSHA2(domain_name.replaceAll("*.", ""), order_user['mail'])
             const dcvAgent = (await readConf(env as any, "DCV_AGENT")) ?? ""
-            domain_item['auto'] = domain_auto.substring(0, 16) + "." + dcvAgent
+            domain_item['auto'] = delegationTarget(domain_item.auto, domain_auto.substring(0, 16), dcvAgent,
+                await readConf(env, "DCV_TARGET_PATTERN") ?? undefined);
             // console.log(domain_item['auto'])
             try { // 设置域名内容 ====================================================
-                let data: Record<string, any> = await agent.dnsAdd(
+                let data: Record<string, any> = domain_item.legacyRecordId ? {success: true} : await agent.dnsAdd(
                     env, domain_item, domain_name);
+                if (data.success && data.result?.id) domain_item.legacyRecordId = data.result.id;
                 if (!data['success']) {
                     domain_item.flag = 1
                     domain_flag = 1
@@ -270,8 +286,20 @@ export async function setApply(env: Bindings, order_user: any, order_info: any) 
                 console.error('Error:', error);
             }
         }
+        if (domain_item.type === "dns-api") {
+            if (!domain_item.dnsHandle && presented >= 4) {
+                domain_item.dnsStatus = "preparing_records";
+                domain_flag = 1;
+            } else {
+                if (!domain_item.dnsHandle) presented++;
+                try { await presentDomainDns(env, order_user.mail, order_info.uuid, domain_item); }
+                catch { domain_item.dnsStatus = "provider_failed"; }
+            }
+        }
         // console.log(domain_item);
         domain_save.push(domain_item);
+        await saves.updateDB(env.DB_CF, "Apply", {list: JSON.stringify([...domain_save,
+            ...JSON.parse(domain_list).slice(domain_save.length)])}, {uuid: order_info.uuid});
     }
     if (domain_text.length == 0) domain_text = "域名处理成功"
     await saves.updateDB(env.DB_CF, "Apply", {list: JSON.stringify(domain_save)}, {uuid: order_info['uuid']})
@@ -287,6 +315,8 @@ export async function opDomain(env: Bindings, order_user: any, order_info: any, 
     // 执行操作部分 =================================================================================
     let domain_save: any[] = []
     let domain_flag: number = 3
+    let automaticChecks = 0;
+    let retriedRecords = 0;
     for (let domain_item of JSON.parse(domain_list)) {
         // console.log(domain_item, sets_list);
         // console.log(sets_list.some(item => item.toLowerCase() === domain_item.name.toLowerCase()));
@@ -297,33 +327,104 @@ export async function opDomain(env: Bindings, order_user: any, order_info: any, 
         if (sets_list.some(item => item.toLowerCase() === domain_item.name.toLowerCase()
             || item.toLowerCase() === "all")) {
             domain_item.flag = 3;
-        } else domain_flag = 2;
-        if (sets_list.length == 0 && domain_item.flag == 3) {
-            await dnsAuthy(env, order_user, order_info);
-            break;
+        } else if (["dns-api", "dns-auto"].includes(domain_item.type)) {
+            if (automaticChecks++ >= 4) { domain_flag = 2; domain_save.push(domain_item); continue; }
+            if (domain_item.type === "dns-api") {
+                try { await authorizedResource(await ensureDao(env), "DNS_ACCOUNT", domain_item.dnsAccountId, order_user.mail, [domain_item.name]); }
+                catch { domain_item.dnsStatus = "access_denied"; domain_flag = 2; domain_save.push(domain_item); continue; }
+            }
+            if (domain_item.type === "dns-api" && !domain_item.dnsHandle && retriedRecords < 1 && Date.now() >= (domain_item.dnsNextAttempt ?? 0)) {
+                retriedRecords++;
+                try { await presentDomainDns(env, order_user.mail, order_info.uuid, domain_item); }
+                catch { domain_item.dnsStatus = "provider_failed"; }
+            }
+            try {
+                const target = domain_item.type === "dns-auto" ? domain_item.auto : `_acme-challenge.${domain_item.name.replace(/^\*\./, "")}`;
+                const cnameReady = domain_item.type !== "dns-auto" || (await query.queryDNS(
+                    `_acme-challenge.${domain_item.name.replace(/^\*\./, "")}`, "CNAME"))
+                    .some((record: any) => record.data === domain_item.auto);
+                if (cnameReady && await txtPropagated(target, domain_item.auth)) {
+                    domain_item.flag = 3;
+                    domain_item.dnsStatus = "propagated";
+                } else {
+                    domain_item.dnsStatus = "waiting_propagation";
+                    domain_flag = 2;
+                }
+            } catch { domain_flag = 2; }
+        } else if (domain_item.flag < 3) {
+            domain_flag = 2;
         }
         domain_save.push(domain_item);
     }
-    if (sets_list.length !== 0) {
+    {
         await saves.updateDB(env.DB_CF, "Apply", {list: JSON.stringify(domain_save)}, {uuid: order_info['uuid']})
         await saves.updateDB(env.DB_CF, "Apply", {text: "订单域名验证状态修改成功"}, {uuid: order_info['uuid']})
         await saves.updateDB(env.DB_CF, "Apply", {flag: domain_flag}, {uuid: order_info['uuid']})
     }
+    if (domain_save.some((item) => item.flag === 3)) {
+        await dnsAuthy(env, order_user, {...order_info, list: JSON.stringify(domain_save)});
+    }
     return {"texts": "处理成功"};
 }
 
+async function presentDomainDns(env: Bindings, mail: string, orderId: string, item: any) {
+    item.dnsAttempts = (item.dnsAttempts ?? 0) + 1;
+    item.dnsNextAttempt = Date.now() + Math.min(3600000, 30000 * 2 ** Math.min(item.dnsAttempts, 7));
+    const dao = await ensureDao(env);
+    const account = await authorizedResource(dao, "DNS_ACCOUNT", item.dnsAccountId, mail, [item.name]);
+    const secrets = await unseal(env.AUTOMATION_KEY, `DNS_ACCOUNT:${account.id}`, account.encrypted);
+    if (!item.dnsHandle) item.dnsHandle = await new DnsProvider(account, secrets).present(
+        `_acme-challenge.${item.name.replace(/^\*\./, "")}`, item.auth, `ACME:${orderId}`);
+    item.dnsStatus = "waiting_propagation";
+}
+
+export async function cleanupDomainDns(env: Bindings, mail: string, item: any) {
+    if (item.dnsHandle) {
+        const account = await authorizedResource(await ensureDao(env), "DNS_ACCOUNT", item.dnsAccountId, mail, [item.name]);
+        const secrets = await unseal(env.AUTOMATION_KEY, `DNS_ACCOUNT:${account.id}`, account.encrypted);
+        await new DnsProvider(account, secrets).cleanup(item.dnsHandle);
+        delete item.dnsHandle;
+    }
+    if (item.legacyRecordId) {
+        const records = await agent.dnsAll(env);
+        const record = records.result?.find((record: any) => record.id === item.legacyRecordId);
+        if (record) {
+            if (record.type !== "TXT" || record.name !== item.auto || record.content !== item.auth) throw new Error("Legacy DNS record changed; refusing cleanup");
+            const result = await agent.uidDel(env, item.legacyRecordId);
+            if (!result.success) throw new Error("Legacy DNS cleanup failed");
+        }
+        delete item.legacyRecordId;
+    }
+    item.dnsStatus = "cleaned";
+}
+
 // 执行域名验证 ====================================================================================
-export async function dnsAuthy(env: Bindings, order_user: any, order_info: any) {
+export async function dnsAuthy(env: Bindings, order_user: any, order_info: any, clientOverride?: any) {
     let domain_list: any = order_info['list'];
     let orders_text: any = JSON.parse(order_info['data'])
-    let client_data: any = await getStart(env, order_user, order_info);
+    let client_data: any = clientOverride ?? await getStart(env, order_user, order_info);
     let orders_data: any = await client_data.getOrder(orders_text); // 获取授权信息
-    let author_save: Record<string, Record<string, any>> = await getAuthy(client_data, orders_data)
+    let author_save: Record<string, Record<string, any>> = await getAuthy(client_data, orders_data, JSON.parse(domain_list))
     // 验证所有域名 ================================================================================
     let domain_save: any[] = [] // 需要最后保存的域名详细验证数据
     let status_flag: number = 4;
     let domain_fail: string[] = [];
+    let checked = 0;
     for (let domain_item of JSON.parse(domain_list)) { // 验证DNS
+        if (domain_item.flag >= 4) {
+            domain_save.push(domain_item);
+            continue;
+        }
+        if (domain_item.type === "dns-api") {
+            try { await authorizedResource(await ensureDao(env), "DNS_ACCOUNT", domain_item.dnsAccountId, order_user.mail, [domain_item.name]); }
+            catch { domain_item.flag = 2; domain_item.dnsStatus = "access_denied"; domain_save.push(domain_item); continue; }
+        }
+        if (domain_item.flag < 3) {
+            status_flag = 2;
+            domain_save.push(domain_item);
+            continue;
+        }
+        if (checked++ >= 4) { domain_save.push(domain_item); continue; }
         // web-self（http-01验证）不需要DNS检查，直接提交验证
         let author_flag: boolean = domain_item.type === "web-self"
             ? (author_save[domain_item.name] != undefined)
@@ -344,15 +445,12 @@ export async function dnsAuthy(env: Bindings, order_user: any, order_info: any) 
             }
             if (author_data.data['status'] == 'pending') {
                 try {
-                    let upload_flag: boolean = await client_data.verifyChallenge(author_data.auth, author_data.data);
-                    console.log('Domain Server Verify Status:', upload_flag);
-                    let submit_flag = await client_data.completeChallenge(author_data.data);
-                    console.log('Domain Remote Upload Status:', submit_flag['status']);
-                    let result_flag = await client_data.waitForValidStatus(author_data.data);
-                    console.log('Domain Remote Verify Status:', result_flag['status']);
-                    if (result_flag.status == "valid") {
-                        domain_item.flag = 4;
+                    if (!domain_item.challengeSubmitted) {
+                        await client_data.completeChallenge(author_data.data);
+                        domain_item.challengeSubmitted = true;
                     }
+                    domain_item.flag = 3;
+                    if (status_flag !== 2) status_flag = 3;
                 } catch (error) {
                     console.log('Domain Remote Verify Errors:', error);
                     domain_item.flag = -1;
@@ -361,11 +459,16 @@ export async function dnsAuthy(env: Bindings, order_user: any, order_info: any) 
             }
             if (author_data.data['status'] == 'valid') {
                 domain_item.flag = 4;
+                try { await cleanupDomainDns(env, order_user.mail, domain_item); }
+                catch { domain_item.dnsStatus = "cleanup_pending"; }
             }
+            if (author_data.data.status === "processing" && status_flag !== 2) status_flag = 3;
         }
         domain_save.push(domain_item);
     }
     orders_data = await client_data.getOrder(orders_text);
+    status_flag = domain_save.some((item) => item.flag < 0) ? -1 : domain_save.some((item) => item.flag < 3)
+        ? 2 : domain_save.some((item) => item.flag === 3) ? 3 : 4;
     // console.log(orders_data);
     await saves.updateDB(env.DB_CF, "Apply", {data: JSON.stringify(orders_data)}, {uuid: order_info['uuid']})
     await saves.updateDB(env.DB_CF, "Apply", {list: JSON.stringify(domain_save)}, {uuid: order_info['uuid']})
@@ -373,7 +476,7 @@ export async function dnsAuthy(env: Bindings, order_user: any, order_info: any) 
     if (status_flag == -1) await saves.updateDB(env.DB_CF, "Apply", {
         text: "域名验证失败:" + JSON.stringify(domain_fail)
     }, {uuid: order_info['uuid']})
-    else await saves.updateDB(env.DB_CF, "Apply", {text: "域名验证通过"}, {uuid: order_info['uuid']})
+    else await saves.updateDB(env.DB_CF, "Apply", {text: status_flag === 4 ? "域名验证通过" : "Waiting for DNS / CA validation"}, {uuid: order_info['uuid']})
     return {"texts": "处理成功"};
 }
 
@@ -417,6 +520,28 @@ export async function getCerts(env: Bindings, order_user: any, order_info: any) 
         await saves.updateDB(env.DB_CF, "Apply", {next: timestamp}, {uuid: order_info['uuid']})
         await saves.updateDB(env.DB_CF, "Apply", {text: "恭喜！证书已成功签发"}, {uuid: order_info['uuid']})
         // await saves.updateDB(env.DB, "Apply", {data: ""}, {uuid: order_info['uuid']})
+        // 边缘证书自动下发：签发（含自动续期）成功后同步到 EdgeOne / ESA。
+        // 下发失败不影响签发结果，只把原因追加到订单备注，后续可由触发器任务补下发。
+        try {
+            const {pushOrder} = await import("./edge");
+            const fresh: any = (await saves.selectDB(
+                env.DB_CF, "Apply", {uuid: {value: order_info['uuid']}}))[0];
+            const results = await pushOrder(env, fresh, {});
+            const failed = results.filter((r: any) => r.status === "fail");
+            if (results.length > 0) {
+                const ok = results.filter((r: any) => r.status === "ok").length;
+                let note = `边缘证书下发：成功 ${ok} 个`;
+                if (failed.length) note += `，失败 ${failed.length} 个（${failed[0].detail}）`;
+                await saves.updateDB(env.DB_CF, "Apply",
+                    {text: "恭喜！证书已成功签发；" + note}, {uuid: order_info['uuid']});
+            }
+        } catch (e) {
+            console.error("edge push after issuance failed:", e);
+        }
+        try {
+            const fresh = await (await ensureDao(env)).getApply(order_info.uuid);
+            if (fresh) await (await import("./deployment")).pushSelectedOrder(env, fresh);
+        } catch { console.error("Selected certificate deployment failed; scheduled retry remains available"); }
     }
     return {"texts": "处理成功"};
 }
@@ -488,7 +613,7 @@ async function getNames(order_info: any, full: boolean = false) {
         const isIP = !!domain_now['isIP'];
         if (full) {
             domain_save.push({
-                type: isIP ? 'ip' : author_now,
+                type: isIP ? 'ip' : 'dns',
                 value: domain_now['name']
             });
         } else {
@@ -500,65 +625,12 @@ async function getNames(order_info: any, full: boolean = false) {
 
 // 获取操作接口 ####################################################################################
 async function getStart(env: Bindings, order_user: any, order_info: any) {
-    let acme_url = acme_url_map[order_info['sign']];
-    // 从 Confs 优先读取三家 CA 的账户凭据（回退到 env / 默认值）
-    const [GTS_KeyTS, GTS_keyID, GTS_keyMC,
-        SSL_KeyTS, SSL_keyID, SSL_keyMC,
-        ZRO_KeyTS, ZRO_keyID, ZRO_keyMC] = await Promise.all([
-        readConf(env as any, "GTS_KeyTS"),
-        readConf(env as any, "GTS_keyID"),
-        readConf(env as any, "GTS_keyMC"),
-        readConf(env as any, "SSL_KeyTS"),
-        readConf(env as any, "SSL_keyID"),
-        readConf(env as any, "SSL_keyMC"),
-        readConf(env as any, "ZRO_KeyTS"),
-        readConf(env as any, "ZRO_keyID"),
-        readConf(env as any, "ZRO_keyMC"),
-    ]);
-    const acme_key_map: Record<string, any> = {
-        "lets-encrypt": order_user['keys'],
-        "google-trust": GTS_KeyTS,
-        "bypass-trust": order_user['keys'],
-        "zeroca-trust": ZRO_KeyTS,
-        "sslcom-trust": SSL_KeyTS,
-    }
-    const acme_eab_map: Record<string, any> = {
-        "lets-encrypt": undefined,
-        "google-trust": {kid: GTS_keyID, hmacKey: GTS_keyMC,},
-        "bypass-trust": undefined,
-        "zeroca-trust": {kid: ZRO_keyID, hmacKey: ZRO_keyMC,},
-        "sslcom-trust": {kid: SSL_keyID, hmacKey: SSL_keyMC,}
-    }
-    if (order_info['sign'] == "sslcom-trust") acme_url += order_info['type'].substring(0, 3);
-    let client_data: Client = new acme.Client({
-        directoryUrl: acme_url,
-        accountKey: acme_key_map[order_info.sign],
-        externalAccountBinding: acme_eab_map[order_info.sign],
-    });
-    try { // 获取账户信息 ================================
-        client_data.getAccountUrl();
-    } catch (e) { // 尝试创建账户 ========================
-        try {
-            await client_data.createAccount({
-                termsOfServiceAgreed: true,
-                contact: ['mailto:' + order_user['mail']],
-            });
-        } catch (e) {
-            if (e instanceof Error) {
-                console.error("Error stack:", e.stack);
-                console.error("Error message:", e.message);
-            } else {
-                console.error("An unknown error occurred:", e);
-            }
-            throw e;
-            // return null
-        }
-    }
-    return client_data;
+    const {getAcmeClient} = await import("./routes/admin_certs_helper");
+    return getAcmeClient(env, order_user, order_info);
 }
 
 // 获取验证数据 ####################################################################################
-async function getAuthy(client_data: any, orders_data: any) {
+async function getAuthy(client_data: any, orders_data: any, domains: any[] = []) {
     let author_list: any[] = await client_data.getAuthorizations(orders_data);
     let author_maps: Record<string, any> = {}
     // console.log("author_list: ", author_list);
@@ -572,8 +644,9 @@ async function getAuthy(client_data: any, orders_data: any) {
         // 查找验证信息（优先dns-01，IP证书使用http-01）=================================
         let author_save = undefined
         // console.log(author_data)
+        const preferred = domains.find((domain) => domain.name === author_name)?.type === "web-self" ? "http-01" : "dns-01";
         for (const c of author_data['challenges']) {
-            if (c.type === "dns-01") {
+            if (c.type === preferred) {
                 author_save = c
                 break
             }
@@ -589,7 +662,6 @@ async function getAuthy(client_data: any, orders_data: any) {
         }
         if (author_save == undefined) continue
         let author_text = await client_data.getChallengeKeyAuthorization(author_save)
-        console.log(author_text);
         // 返回结果 ========================================
         // console.log(author_name, author_type, author_save['token']);
         author_maps[author_name] = {
@@ -607,6 +679,7 @@ async function dnsCheck(author_save: any, domain_item: any) {
     // 设置数据 =============================================
     let domain_name = domain_item.name.replaceAll("*.", "")
     let author_text = domain_item.auth; // 目标解析记录
+    if (domain_item.type !== "dns-auto") return txtPropagated(`_acme-challenge.${domain_name}`, author_text);
     let domain_type = "TXT" // 待验证域名格式文本TXT
     if (domain_item.type == "dns-auto") { // 如果DNS-AUTO模式
         domain_type = "CNAME" // 此时需检查CNAME而不是TXT记录
@@ -624,6 +697,7 @@ async function dnsCheck(author_save: any, domain_item: any) {
             break;
         }
     }
+    if (author_flag && domain_item.type === "dns-auto") return txtPropagated(domain_item.auto, domain_item.auth);
     // console.log(author_flag);
     return author_flag;
 }

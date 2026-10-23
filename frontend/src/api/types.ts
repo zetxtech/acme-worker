@@ -16,7 +16,12 @@ export interface DomainItem {
   name: string;
   wild: boolean;
   root: boolean;
-  type: 'dns-self' | 'dns-auto' | 'web-self';
+  type: 'dns-self' | 'dns-auto' | 'dns-api' | 'web-self';
+  dnsAccountId?: string;
+  dnsStatus?: string;
+  dnsAttempts?: number;
+  dnsNextAttempt?: number;
+  token?: string;
   isIP?: boolean;
   // 后端返回额外字段
   flag?: number;
@@ -36,6 +41,7 @@ export interface CertSubject {
 
 /** 申请表单 */
 export interface ApplyPayload {
+  targetIds?: string[];
   domains: DomainItem[];
   globals: {
     ca: string;
@@ -82,6 +88,7 @@ export type OrderAction =
   | 'ca_key'
   | 're_new'
   | 'rm_key'
+  | 'edge_push'
   | 'ca_del';
 
 /** Nonce 响应 */

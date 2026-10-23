@@ -1,6 +1,7 @@
 import { App as AntdApp, Button } from 'antd';
 import {
   Archive,
+  CloudUpload,
   Download,
   FileLock2,
   Key,
@@ -179,6 +180,19 @@ export default function OrderActions({
             }
           >
             续期证书
+          </Button>
+          <Button
+            size="large"
+            icon={<CloudUpload size={16} />}
+            loading={operating}
+            disabled={operating}
+            onClick={() =>
+              onAction('edge_push', undefined, {
+                confirm: '确认把当前证书重新下发到所有启用的边缘平台？',
+              })
+            }
+          >
+            边缘下发
           </Button>
           <Button
             size="large"

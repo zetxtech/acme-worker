@@ -34,6 +34,11 @@
   border-color: var(--brand);
 }
 
+.stepItem:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .stepActive {
   background: var(--gradient-brand) !important;
   border-color: transparent !important;
@@ -179,14 +184,17 @@
 
 .domainControls {
   display: flex;
-  gap: 20px;
-  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
 }
 
 .switchLabel {
-  display: inline-flex;
+  display: flex;
+  flex: 1 1 0;
   align-items: center;
+  justify-content: center;
   gap: 8px;
+  min-width: 0;
   font-family: var(--font-chinese);
   font-size: 12px;
   color: var(--text-2);
@@ -195,6 +203,25 @@
 
 .verifySeg {
   margin-top: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.verifySeg :global(.ant-segmented-item) {
+  min-width: 0;
+}
+
+.verifySeg :global(.ant-segmented-item-label) {
+  min-width: 0;
+  min-height: 32px;
+  height: 100%;
+  padding: 4px;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: normal;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .addBtn {

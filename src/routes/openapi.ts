@@ -28,6 +28,10 @@ import {checkApplyGuard} from "../middleware/applyGuard";
 import {buildStoredZip} from "../utils/zip";
 import {pemToPfxBuffer, splitCertChain} from "../utils/pfx";
 import {getAcmeClient} from "./admin_certs_helper";
+import {assertCaAvailable, assertDcvAvailable, caCapabilities, dcvCapability, normalizeDomains, requestedNames} from "../capabilities";
+import {readConf} from "../db/conf";
+import {validateSelections} from "../resources";
+import {deploymentStates, pushSelectedOrder} from "../deployment";
 
 /** 解析鉴权头 */
 function parseAuth(c: Context): { mail: string; token: string } | null {
@@ -120,12 +124,19 @@ async function handleCreateOrder(c: Context<{ Bindings: Bindings }>): Promise<Re
     }
 
     // 组织 Apply 记录，复用 Web 格式
-    const domainSave = body.domains.map((d: any) => ({
-        name: d.name, wild: !!d.wild, root: !!d.root, type: d.type ?? "dns-self",
-        flag: 0, text: "",
-    }));
+    let selectedTargets: string[];
+    let domainSave: any[];
+    const dao = await ensureDao(c.env);
+    try {
+        assertCaAvailable(await caCapabilities((name) => readConf(c.env, name)),
+            body.globals?.ca ?? "lets-encrypt", requestedNames(body.domains));
+        domainSave = normalizeDomains(body.domains);
+        assertDcvAvailable(await dcvCapability((name) => readConf(c.env, name)), domainSave);
+        selectedTargets = await validateSelections(dao, user.mail, domainSave, body.targetIds, c.env);
+    } catch (error) {
+        return c.json({code: "BAD_REQUEST", message: (error as Error).message}, 400);
+    }
     const uuid = randomUuid(16);
-    const dao = await ensureDao(c.env as any);
     const now = Date.now();
     await dao.insertApply({
         uuid,
@@ -142,6 +153,7 @@ async function handleCreateOrder(c: Context<{ Bindings: Bindings }>): Promise<Re
         text: "订单提交成功（来自 API）",
     } as ApplyRow);
 
+    await dao.upsertConf(`ORDER_DEPLOYMENT:${uuid}`, JSON.stringify(selectedTargets), now);
     return c.json({code: "OK", message: "已创建", uuid}, 200);
 }
 
@@ -344,4 +356,24 @@ export function mountOpenApiRoutes(app: Hono<{ Bindings: Bindings }>): void {
     app.get("/api/v1/orders/:uuid/zip", handleDownloadZip);
     app.get("/api/v1/orders/:uuid/pfx", handleDownloadPfx);
     app.post("/api/v1/orders/:uuid/revoke", handleRevokeOrder);
+    app.get("/api/v1/capabilities", async (c) => {
+        const user = c.get("apiUser" as never) as UserRow;
+        const items = await caCapabilities((name) => readConf(c.env, name));
+        return c.json({code: "OK", cas: items.map((item) => ({...item, missing: Number(user.is_admin) === 1 ? item.missing : []}))});
+    });
+    app.get("/api/v1/orders/:uuid/deployments", async (c) => {
+        const user = c.get("apiUser" as never) as UserRow;
+        const dao = await ensureDao(c.env);
+        const row = await ownsApply(dao, user, c.req.param("uuid"));
+        if (!row) return c.json({code: "NOT_FOUND"}, 404);
+        return c.json({code: "OK", items: await deploymentStates(dao, row.uuid)});
+    });
+    app.post("/api/v1/orders/:uuid/deployments/:targetId/retry", async (c) => {
+        const user = c.get("apiUser" as never) as UserRow;
+        const dao = await ensureDao(c.env);
+        const row = await ownsApply(dao, user, c.req.param("uuid"));
+        if (!row) return c.json({code: "NOT_FOUND"}, 404);
+        try { return c.json({code: "OK", items: await pushSelectedOrder(c.env, row, {targetId: c.req.param("targetId"), manual: true})}); }
+        catch (error) { return c.json({code: "BAD_REQUEST", message: (error as Error).message}, 400); }
+    });
 }

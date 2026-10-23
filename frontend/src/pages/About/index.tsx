@@ -24,7 +24,7 @@ import styles from './About.module.css';
 
 const { Paragraph, Text, Link } = Typography;
 
-const GITHUB_URL = 'https://github.com/PIKACHUIM/CFWorkerACME';
+const GITHUB_URL = 'https://github.com/zetxtech/acme-worker';
 
 const TECH_STACK = [
   { name: 'Cloudflare Worker', icon: <Cloud size={14} />, color: 'orange' },
@@ -149,7 +149,7 @@ export default function AboutPage() {
         {/* 底部 */}
         <div className={styles.footer}>
           Made with <HeartFilled style={{ color: '#ef4444', margin: '0 4px' }} /> by{' '}
-          <Link href={GITHUB_URL} target="_blank">PIKACHUIM</Link>
+          <Link href={GITHUB_URL} target="_blank">zetxtech</Link>
           {' '}& Open Source Community
         </div>
       </div>

@@ -30,6 +30,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # misc
+_artifacts/
+tests/lego-wasm-probe/*.wasm
+tests/lego-wasm-probe/wasm_exec.js
 .DS_Store
 wrangler.encrypt.jsonc
 wrangler.oplists.jsonc

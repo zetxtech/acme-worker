@@ -86,6 +86,68 @@
 
 ## 📦 本地开发与部署
 
+### Worker 证书工作流
+
+当前 Cloudflare Worker 配置支持在申请时选择 DNS 账户和多个部署目标。所有访问、验证和下发逻辑都在 Worker 中执行，不需要客户端守护进程、代理或额外后端。D1 继续使用现有 `DB_CF` 绑定和 Confs/Apply/Users 表。
+
+- CA 选项由 `/capabilities` 和 `/api/v1/capabilities` 返回实际配置状态；两套创建入口均在保存订单前校验。Google Public CA、ZeroSSL 和 SSL.com 复用现有全局账户私钥，并按目录与私钥指纹保存已注册账户 URL。
+- Let's Encrypt 无需 EAB；Google Public CA 和 ZeroSSL 需要相应账户配置。SSL.com 免费 DV 的限制为单个 FQDN，不支持通配、多域名或 IP；其他产品的费用取决于账户产品，不能据此视为免费。未使用真实 CA 账户进行产品或费用验证。
+- “资源管理”提供 DNS 服务商账户，以及 HTTPS、SSH/SFTP、Nginx、Traefik、EdgeOne 和 ESA 部署目标。侧边栏已拆分为“域名资源”与“部署目标”两个入口，旧 `/resources` 会重定向到域名资源。私有 DNS 账户默认按申请域名和服务商权限自动查找区域，不需要预先填写域名；可在高级设置中选择限制域名。部署目标和共享资源仍需明确域名范围；共享由管理员主动启用，不因管理员身份默认获得资源使用权。检查连接时需选择实际域名；涉及临时 TXT 写入和清理的检查会先要求确认。
+
+### 签发机构账户（EAB）
+
+账户绑定凭据（EAB）只在**首次注册** ACME 账户时使用；注册完成后，账户由账户私钥标识并长期有效，后续签发和续期都不再需要 EAB。系统会把注册结果持久化，因此在已注册后即使 EAB 字段留空，该签发机构仍然可用。
+
+各家的差异：
+
+| 签发机构 | EAB | 说明 |
+| --- | --- | --- |
+| Let's Encrypt | 不需要 | 账户随用户私钥创建，长期有效 |
+| Google Public CA | 需要，一次性 | EAB 只能使用一次，且必须在创建后 7 天内完成注册；**注册出的账户无有效期限制** |
+| ZeroSSL | 需要，可复用 | 同一份 EAB 可重复使用，有每日次数上限 |
+| SSL.com | 需要，可复用 | 账户创建后只需保留账户私钥 |
+
+账户私钥（`*_KeyTS`）可以留空：系统会在首次需要时自动生成并保存。**不要随意更换账户私钥**，更换等于新账户，需要重新准备一份 EAB。若首次注册失败（例如 Google 的 EAB 已过期或已被使用），系统会直接说明原因并提示重新生成 EAB。
+
+### DCV 托管
+
+“DCV 托管”让用户只需配置一次 CNAME，后续续期由平台自动维护验证记录。它依赖一个管理员维护的专用子域名及其 DNS 编辑权限，因此在未配置时申请页会直接禁用该验证方式，后端也会在创建订单前拒绝，不会等到提交后才失败。
+
+管理员在“域名资源”页顶部点击“启用 DCV 托管”，填写专用子域名（如 `dcv.example.com`）和 Cloudflare DNS API Token。Token 需包含该域名所在区域的区域读取与 DNS 编辑权限。启用时会在该子域名下临时写入并清理一条测试 TXT 记录以验证权限；成功后 Token 加密保存在服务端，不会回显。现有订单已有的委派目标保持不变。
+- 管理员必须在 Worker secret 中配置 `AUTOMATION_KEY`，其值为 32 字节随机数据的 Base64 编码。资源凭据以随机 nonce 的 AES-GCM 加密，并绑定资源身份；未配置或格式不正确时禁止保存，不回退为明文。不要将密钥放入公开 vars、代码或 Confs。直接更换该密钥将使旧资源无法解密，需要重新录入凭据。
+- 编辑时空白凭据表示保留原值；选择“替换全部已保存凭据”时必须重新填写所需凭据。被订单引用的资源不能直接删除。Cloudflare token 至少需要对应区域的读取和 DNS 修改权限；其他供应商凭据也应限制到所需区域和记录操作。
+- 手动 TXT 仍需在每次续期更新记录。旧 CNAME 委派继续使用稳定目标；可通过管理员配置 `DCV_TARGET_PATTERN` 指定 `{hash}` / `{zone}` 模板，生成结果必须留在 `DCV_AGENT` 区域内。直接 DNS 账户不要求修改 NS 或设置 CNAME。
+- 自动 TXT 使用独立记录句柄，通配与根域名的同名记录可共存。传播检查、验证状态和失败清理跨任务持久化推进，不删除整个 RRset。记录准备、验证和个人目标下发按小批次进行，剩余项由后续任务继续处理；签发状态与各目标部署状态分开记录。
+- SSH 仅支持公网可达目标，主机 SHA256 指纹为必填项，应从可信渠道获取。普通公网 Worker 不能访问任意私网地址。支持密码或私钥、受限超时、PEM/PFX、文件权限和非交互命令；Nginx 会暂存、备份、检查并重载，失败时尝试恢复文件及原配置。
+- Traefik 默认使用动态 PEM 配置。`acme.json` 模式需要明确 resolver、现有账户、持续停止外部写入方的确认、远端独占锁和替换前内容复查；保留其他 resolver 与证书，文件权限为 0600。远端锁不是 Traefik 自身遵循的跨进程锁，不能持续保证外部不写入时应选择动态 PEM。连接中断留下的锁需要先检查远端状态，不会擅自删除外部锁。
+- HTTPS 目标必须使用公网 HTTPS 地址和认证头，不允许 URL 凭据、查询参数或跳转；可选 HMAC 使用 `timestamp.version.body` 签名。接收方应核对 `X-Certificate-Timestamp`、`X-Certificate-Version`、`X-Certificate-Signature` 和 `Idempotency-Key`，避免重放及重复应用。
+- 订单的个人目标仅用于该订单及其续期；原管理员全局 EdgeOne/ESA 目标继续遵循原有匹配约定。失败目标可单独重试，不重新签发证书，也不重复下发未变化的成功目标。
+
+创建接口 `/apply/` 与 `/api/v1/orders` 使用相同的选择字段，例如：
+
+```json
+{
+  "domains": [{"name": "example.com", "type": "dns-api", "dnsAccountId": "saved-account-id"}],
+  "globals": {"ca": "lets-encrypt", "encryption": "eccp256", "auto_renew": true},
+  "targetIds": ["saved-target-id"],
+  "subject": {}
+}
+```
+
+资源管理接口为登录后访问的 `/resources/dns` 与 `/resources/targets`（GET/POST、`/:id` PUT/DELETE、`/:id/test` POST）。连接测试只证明当次区域读取或协议连通，不代表实际签发或部署成功。开放 API 可通过 `GET /api/v1/orders/:uuid/deployments` 查询状态，并通过 `POST /api/v1/orders/:uuid/deployments/:targetId/retry` 重试所选目标；使用原有 API 鉴权头。
+
+Windows 本地验证使用 Node 22（测试使用进程内 SQLite），不访问远程 D1：
+
+```powershell
+& .\node_modules\.bin\tsx.cmd --test .\tests\certificate-workflow.test.ts
+npm run build
+& .\node_modules\.bin\wrangler.cmd deploy --dry-run
+```
+
+隔离 SSH 运行探测使用 `tests/wrangler.ssh-smoke.jsonc`，仅在本地 8793 启动。设置 `SSH_WORKER_SMOKE_URL=http://127.0.0.1:8793` 后，测试会临时启动 Windows 内存 SSH/SFTP 协议夹具；它不是应用后端或生产部署目标。设置 `WORKFLOW_UI_URL=http://127.0.0.1:5194` 后，UI 测试使用独立无头系统 Chrome 和无生产凭据的合成 API 样例，截图保存在 `_artifacts/certificate-workflow/`。未设置这些变量时，对应运行验收会明确跳过，不能视为通过。
+
+已验证公网 GitHub SSH 主机指纹与握手，以及 workerd 对临时夹具的密码/私钥认证、SFTP、PEM/PFX、Nginx 失败恢复、Traefik 合并与权限。尚未验证真实 DNS 账户、真实 CA 签发、实际 Nginx/Traefik 服务或用户服务器部署，也未评估生产套餐下的大批量配额。完成所需生产验收前不要部署或修改实际 DNS/SSH 目标。
+
 ### 1. 克隆代码
 
 ```bash
@@ -150,7 +212,7 @@ npm run web-install
   "d1_databases": [
     {
       "binding": "DB_CF",
-      "database_name": "workacme-data",
+      "database_name": "workacme-db",
       "database_id": "<database-id>"
     }
   ],
@@ -158,6 +220,10 @@ npm run web-install
   "triggers": { "crons": ["*/1 * * * *"] }
 }
 ```
+
+> Cloudflare 免费套餐对**每个账号**只允许 5 个 cron 触发器。若配额已被其它 Worker 占用，部署时会报
+> `This account has reached the Workers Free limit of 5 cron triggers per account`。
+> 此时请删除本文件的 `triggers` 字段，改用下文「触发器端点」由外部调度器驱动。
 
 ### 4. 本地调试
 
@@ -193,11 +259,66 @@ npm run deploy-cf:test
 > 首次部署前需先创建并绑定 D1 数据库：
 >
 > ```bash
-> wrangler d1 create workacme-data            # 1. 创建数据库
-> wrangler d1 execute workacme-data --remote --file schema.set.sql   # 2. 初始化表结构
+> wrangler d1 create workacme-db            # 1. 创建数据库
+> wrangler d1 execute workacme-db --remote --file schema.set.sql   # 2. 初始化表结构
 > ```
 >
 > 把上一步输出的 `database_id` 填入 `wrangler.jsonc` 的 `d1_databases[0].database_id` 后再执行 `npm run deploy-cf`。
+
+---
+
+## ⚙️ 自动化
+
+管理后台「自动化」页面（`/admin/automation`）提供三块能力，全部在运行时配置，改动无需重新部署。
+
+### 1. 触发器端点（访问即等同于 cron）
+
+为每个端点设置名称、令牌与要执行的任务后，用任意外部调度器定时请求：
+
+```bash
+curl "https://<你的域名>/trigger/<端点名>?token=<令牌>"
+```
+
+响应示例：
+
+```json
+{
+  "code": "OK",
+  "trigger": "acme-tasks",
+  "status": "ok",
+  "detail": "[process] 推进 2 个订单 | [edge-sync] 检查 3 个已签发订单，成功下发 1 次"
+}
+```
+
+令牌也可通过 `X-Trigger-Token` 请求头传递；端点停用或令牌不匹配分别返回 `403` / `401`。
+
+可选任务：
+
+| 任务 | 说明 |
+| --- | --- |
+| `process` | 按状态机推进所有未完成的订单（创建订单 / 写入 DNS / 完成验证 / 签发证书） |
+| `renew` | 扫描已开启自动续期且临近到期的证书并重新签发（提前天数可配置） |
+| `edge-sync` | 把已签发但未下发或下发失败的证书重新推送到边缘平台 |
+| `clean-dns` | 删除 DCV 代理域名下超过 7 天的验证 TXT 记录 |
+
+### 2. 边缘证书自动下发
+
+证书**签发或自动续期成功后**会自动推送到已启用的目标，失败不影响签发，可由 `edge-sync` 任务或页面上的「补下发」重试。
+
+| 平台 | 调用链 | 所需权限 |
+| --- | --- | --- |
+| 腾讯云 EdgeOne | `ssl:UploadCertificate` → `teo:ModifyHostsCertificate`（`Mode=sslcert`） | `teo:DescribeZones`、`teo:DescribeAccelerationDomains`、`teo:ModifyHostsCertificate`、`ssl:UploadCertificate` |
+| 阿里云 ESA | `esa:SetCertificate`（`Type=upload`） | `esa:ListSites`、`esa:SetCertificate` |
+
+- 站点 ID（EdgeOne `ZoneId` / ESA `SiteId`）与加速域名可留空，系统会按证书域名自动匹配。
+- 「适用域名」用于限定目标生效范围，支持精确域名与 `*.example.com`，留空表示对所有订单生效。
+- 同一张证书重复下发会被识别并跳过，证书内容变化时才会再次调用平台接口。
+- EdgeOne 使用 TC3-HMAC-SHA256，ESA 使用 ACS3-HMAC-SHA256，签名均在 Worker 内用 WebCrypto 完成。
+
+### 3. 定时任务
+
+若账号仍有 cron 配额，可在「自动任务」中启用 Cloudflare 定时触发并设置最小执行间隔（默认 60 分钟）与执行任务；
+`src/cfapp.ts` 的 `scheduled()` 会按该配置执行。没有配额时使用触发器端点即可，两者执行的是同一套任务。
 
 #### ② 部署到 EdgeOne Pages
 
@@ -389,6 +510,27 @@ location /acme/ {
 ```
 
 ---
+
+## DNS 供应商目录与更新
+
+DNS 账户目录和凭据字段从锁定版本的 lego 上游源码生成，不逐家维护前端表单。当前版本为 `v5.5.2`：共收录 223 家，其中 212 家已构建到 31 个 Worker 执行分片，11 家因运行环境或清理安全问题禁用。已构建不等于已逐家通过真实账户签发测试。
+
+执行分片没有公网入口，通过主站的 Cloudflare Service Bindings 调用。凭据仍在主站加密保存，写入记录、DNS 传播检查、ACME 验证和记录清理在同一 provider 实例生命周期中完成。普通账户不能修改执行器版本或绕过验证。
+
+对标为“需验证账户”的供应商，先保存凭据，再使用账户测试执行写入、传播与清理检查。测试会修改所填域名的 ACME TXT 记录，请使用有权管理的域名。更换凭据、修改配置或更新执行分片后，原验证记录失效，需要重新测试。明确不兼容的供应商不可通过此流程启用。
+
+在 Windows 原生终端、项目根目录执行：
+
+```powershell
+npm run providers:update
+npm run deploy-cf
+```
+
+`providers:update` 同步锁定上游、生成凭据目录及分组、构建全部分片，并运行测试、体积与一致性门禁。`deploy-cf` 构建前端后，校验或恢复远端分片，补传变更部分，最后发布带完整服务绑定的主站。不要绕过该入口直接发布不含分片绑定的原始配置。
+
+升级到新的上游版本时，需要更新同步脚本中的固定版本及 Go module checksum，并核对 DoH 兼容补丁的上游文件哈希。补丁上下文改变时流程会拒绝更新，不会默默应用旧补丁，也不会沿用旧版本的运行测试证据。新增、移除和变更供应商会生成差异报告。
+
+发布过程使用现有的 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID` 环境变量，不会启用收费套餐。恢复点、构建报告和线上运行检查结果保存在 git 忽略的 `_artifacts/lego-dns/` 下。`AUTOMATION_KEY` 不会在发布时轮换。
 
 ## ❓ 常见问题
 

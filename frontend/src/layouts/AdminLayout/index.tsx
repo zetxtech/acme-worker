@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { Drawer } from 'antd';
 import { Outlet } from 'react-router-dom';
 import BackgroundFx from '@components/organisms/BackgroundFx';
 import Sidebar from '@components/organisms/Sidebar';
 import TopBar from '@components/organisms/TopBar';
+import Loading from '@components/molecules/Loading';
 import { useResponsive } from '@hooks/useResponsive';
 import styles from './AdminLayout.module.css';
 
@@ -42,7 +43,9 @@ export default function AdminLayout() {
         />
         <main className={styles.content}>
           <div className={styles.scrollArea}>
-            <Outlet />
+            <Suspense fallback={<Loading overlay />}>
+              <Outlet />
+            </Suspense>
           </div>
         </main>
       </div>

@@ -11,7 +11,6 @@ import {
 import { Link } from 'react-router-dom';
 import PageShell from '@components/Layout/PageShell';
 import SectionHeader from '@components/Layout/SectionHeader';
-import TerminalPrompt from '@components/molecules/TerminalPrompt';
 import StatCard from '@components/molecules/StatCard';
 import Pill from '@components/atoms/Pill';
 import StatusPulse from '@components/molecules/StatusPulse';
@@ -119,24 +118,6 @@ export default function Panel() {
 
   return (
     <PageShell>
-      {/* 顶部问候 */}
-      <motion.div
-        className={styles.greet}
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
-        <TerminalPrompt
-          user={email?.split('@')[0] || 'guest'}
-          host="certhub"
-          path="~/panel"
-          suffix={
-            <span className={styles.greetSuffix}>
-              welcome back <Kaomoji mood="welcome" inline size={14} />
-            </span>
-          }
-        />
-      </motion.div>
-
       {/* 主网格 */}
       <div className={styles.mainGrid}>
         {/* 左：证书总览（占 2/3） */}

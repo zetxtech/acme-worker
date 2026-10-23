@@ -8,7 +8,52 @@
 import * as acme from "acme-client";
 import type {Bindings} from "../index";
 import type {ApplyRow, UserRow} from "../db/dao";
-import {readConf} from "../db/conf";
+import {readConf, writeConf} from "../db/conf";
+import {ensureDao} from "../db";
+import {sha256Hex} from "../edge/tencent";
+import type {Dao} from "../db/dao";
+
+export async function registeredClient(dao: Pick<Dao, "getConf" | "upsertConf">,
+    options: any, mail: string, create: (options: any) => any = (options) => new acme.Client(options)) {
+    // Normalize the key so the account identity never changes because of surrounding whitespace:
+    // a different identity would register a second account and consume the one-time EAB again.
+    const accountKey = typeof options.accountKey === "string" ? options.accountKey.trim() : "";
+    if (!accountKey) throw new Error("ACME account private key is required");
+    const identity = `ACME_ACCOUNT:${await sha256Hex(options.directoryUrl + "\n" + accountKey)}`;
+    const accountUrl = await dao.getConf(identity);
+    // The account key is the account identity: once registered, signed requests never need the EAB again.
+    // Dropping it also avoids sending a spent/expired secret, which CAs would reject.
+    const client = create({...options, accountKey, externalAccountBinding: accountUrl ? undefined : options.externalAccountBinding,
+        accountUrl: accountUrl || undefined});
+    if (!accountUrl) {
+        try {
+            await client.createAccount({termsOfServiceAgreed: true, contact: ["mailto:" + mail]});
+        } catch (error: any) {
+            const detail = String(error?.message ?? error);
+            throw new Error("ACME account registration failed (" + detail + "). External Account Binding is consumed by the "
+                + "first registration only, and Google invalidates an unused EAB secret after 7 days; generate a new EAB "
+                + "secret for this CA and keep the account key unchanged.");
+        }
+        await dao.upsertConf(identity, client.getAccountUrl(), Date.now());
+    }
+    return client;
+}
+
+/**
+ * 解析某 CA 的账户私钥：优先使用管理员配置，其次是系统自动生成并持久化的私钥。
+ * 自动生成后不要再替换，否则会以新账户身份重新注册，并再次需要 EAB。
+ */
+export async function resolveAccountKey(env: Bindings, sign: string, configured: any): Promise<string> {
+    const trimmed = typeof configured === "string" ? configured.trim() : "";
+    if (trimmed) return trimmed;
+    if (!["google-trust", "zeroca-trust", "sslcom-trust"].includes(sign)) return "";
+    const stored = (await readConf(env as any, `ACME_KEY:${sign}`))?.trim();
+    if (stored) return stored;
+    const generated = (await acme.crypto.createPrivateEcdsaKey("P-256")) as any;
+    const pem = generated.toString().trim();
+    await writeConf(env as any, `ACME_KEY:${sign}`, pem);
+    return pem;
+}
 
 const ACME_URL: Record<string, any> = {
     "lets-encrypt": acme.directory.letsencrypt.production,
@@ -19,11 +64,11 @@ const ACME_URL: Record<string, any> = {
 };
 
 /** 与 certs.ts 中 getStart() 等价，但独立不依赖 saves 层 */
-export async function getAcmeClient(
+export async function getAcmeOptions(
     env: Bindings,
     user: UserRow,
     order: ApplyRow,
-): Promise<acme.Client> {
+) {
     const sign = String(order.sign ?? "lets-encrypt");
     let url = ACME_URL[sign];
 
@@ -59,18 +104,13 @@ export async function getAcmeClient(
     if (sign === "sslcom-trust" && typeof order.type === "string") {
         url += (order.type as string).substring(0, 3);
     }
-    const client = new acme.Client({
+    return {
         directoryUrl: url,
-        accountKey: keysMap[sign] ?? "",
+        accountKey: await resolveAccountKey(env, sign, keysMap[sign]),
         externalAccountBinding: eabMap[sign],
-    });
-    try {
-        client.getAccountUrl();
-    } catch {
-        await client.createAccount({
-            termsOfServiceAgreed: true,
-            contact: ["mailto:" + user.mail],
-        });
-    }
-    return client;
+    };
+}
+
+export async function getAcmeClient(env: Bindings, user: UserRow, order: ApplyRow): Promise<acme.Client> {
+    return registeredClient(await ensureDao(env), await getAcmeOptions(env, user, order), user.mail);
 }

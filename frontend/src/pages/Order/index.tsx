@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { App, Button, Skeleton, Spin } from 'antd';
+import { App, Button, Skeleton } from 'antd';
 import {
   ArrowLeft,
   Copy,
   RefreshCw,
 } from 'lucide-react';
 import PageShell from '@components/Layout/PageShell';
-import TerminalPrompt from '@components/molecules/TerminalPrompt';
 import Kaomoji from '@components/molecules/Kaomoji';
+import Loading from '@components/molecules/Loading';
 import ConfirmIdContent from '@components/molecules/ConfirmIdContent';
 import RevokeReasonSelect from '@components/molecules/RevokeReasonSelect';
 import { useCopy } from '@hooks/useCopy';
@@ -20,6 +20,7 @@ import CertInfo from './CertInfo';
 import DomainVerify from './DomainVerify';
 import OrderActions from './OrderActions';
 import OrderProgress from './OrderProgress';
+import Deployments from './Deployments';
 import styles from './Order.module.css';
 
 export default function OrderPage() {
@@ -73,16 +74,16 @@ export default function OrderPage() {
       setActionTip(ACTION_TIP[action] || '处理中，请稍候...');
       setOperating(true);
       try {
-        const result = await operateOrder(
+        const { value, texts } = await operateOrder(
           uuid,
           action,
           domainName,
           action === 'ca_del' ? { revokeReason } : undefined,
         );
         if (action === 'ca_get' || action === 'ca_key') {
-          if (result) {
+          if (value) {
             downloadAsFile(
-              result,
+              value,
               opts?.filename ||
                 `${uuid}.${action === 'ca_get' ? 'crt' : 'pem'}`,
             );
@@ -94,8 +95,15 @@ export default function OrderPage() {
           message.success('操作成功');
           setTimeout(() => navigate('/certs'), 500);
         } else {
-          message.success('操作成功');
           await load();
+          // 后端会带回每个域名的处理结果；若 DNS 尚未生效仍会停在待验证，需明确告知原因
+          if (action === 'verify' || action === 'single') {
+            const pending = !!texts && /未|失败|稍后|重试/.test(texts);
+            if (pending) message.warning(texts, 6);
+            else message.success('验证完成');
+          } else {
+            message.success('操作成功');
+          }
         }
       } catch {
         /* 拦截器已 toast */
@@ -185,15 +193,6 @@ export default function OrderPage() {
     <PageShell>
       {/* 顶部：路径 + 返回 + 复制ID */}
       <div className={styles.greet}>
-        <TerminalPrompt
-          host="certhub"
-          path={`~/order/${shortenId(order.uuid, 6)}`}
-          suffix={
-            <span className={styles.cmdText}>
-              inspect <span className={styles.muted}>// id:{shortenId(order.uuid, 10)}</span>
-            </span>
-          }
-        />
         <div className={styles.topActions}>
           <Button
             size="small"
@@ -227,16 +226,18 @@ export default function OrderPage() {
       <CertInfo order={order} />
 
       {/* 域名验证状态（仅在未完成时显示） */}
-      {order.flag < 5 && order.flag !== -1 && (
+      {order.flag !== -1 && (
         <DomainVerify
           order={order}
           onVerifySingle={(name) =>
-            handleAction('single', name, {
+            handleAction(order.list.find((item) => item.name === name)?.type === 'dns-api' ? 'process' : 'single', name, {
               confirm: `确认触发 ${name} 的单独验证？`,
             })
           }
         />
       )}
+
+      <Deployments order={order}/>
 
       {/* 底部操作栏 */}
       <OrderActions
@@ -245,13 +246,12 @@ export default function OrderPage() {
         onAction={handleAction}
       />
 
-      {/* 操作中全屏遮罩 ===================================== */}
-      <Spin
-        spinning={operating}
-        fullscreen
-        size="large"
-        tip={actionTip}
-      />
+      {/* 操作中遮罩：与页面加载一致的半透明遮罩，整页均匀变暗 */}
+      {operating && (
+        <div className={styles.busyMask}>
+          <Loading text={actionTip} />
+        </div>
+      )}
     </PageShell>
   );
 }
@@ -265,6 +265,7 @@ const ACTION_TIP: Record<string, string> = {
   modify: '正在修改申请，请稍候...',
   cancel: '正在取消订单...',
   re_new: '正在发起续期流程...',
+  edge_push: '正在把证书下发到边缘平台...',
   ca_get: '正在下载证书...',
   ca_key: '正在下载密钥...',
   ca_del: '正在吊销证书...',

@@ -96,6 +96,7 @@ export interface Dao {
     listApplies(filter?: QueryFilter, page?: Pagination): Promise<{ rows: ApplyRow[]; total: number }>;
     insertApply(row: ApplyRow): Promise<void>;
     updateApply(uuid: string, patch: Partial<ApplyRow>): Promise<void>;
+    updateApplyListIfUnchanged?(uuid: string, previous: string, next: string): Promise<boolean>;
     deleteApply(uuid: string): Promise<void>;
     deleteAppliesByMail(mail: string): Promise<number>;
     /** 统计某用户某时间段内创建的 Apply 数（用于月度限额） */
@@ -108,6 +109,8 @@ export interface Dao {
     listConfs(): Promise<ConfRow[]>;
     upsertConf(name: string, data: string, time: number): Promise<void>;
     deleteConf(name: string): Promise<void>;
+    claimConfLease?(name: string, token: string, expiresAt: number, now: number): Promise<boolean>;
+    releaseConfLease?(name: string, token: string): Promise<void>;
 }
 
 /** 支持的数据源枚举 */

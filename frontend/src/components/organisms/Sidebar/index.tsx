@@ -3,14 +3,17 @@ import {
   Activity,
   BookOpen,
   FileStack,
+  Globe,
   HelpCircle,
   Info,
   LayoutGrid,
   PlusCircle,
   ShieldCheck,
   Settings2,
+  Server,
   Users,
   UserCog,
+  Zap,
 } from 'lucide-react';
 import Logo from '../Logo';
 import UserCard from '../UserCard';
@@ -28,7 +31,9 @@ interface MenuItem {
 const MENU: MenuItem[] = [
   { path: '/panel', label: '管理中心', icon: <LayoutGrid size={18} /> },
   { path: '/certs', label: '证书列表', icon: <FileStack size={18} /> },
-  { path: '/apply', label: '申请证书', icon: <PlusCircle size={18} />, badge: 'new' },
+  { path: '/apply', label: '申请证书', icon: <PlusCircle size={18} /> },
+  { path: '/domains', label: '域名资源', icon: <Globe size={18} /> },
+  { path: '/deployments', label: '部署目标', icon: <Server size={18} /> },
   { path: '/account', label: '账号设置', icon: <UserCog size={18} /> },
   { path: '/account/apidoc', label: 'API 文档', icon: <BookOpen size={18} /> },
   { path: '/help', label: '帮助文档', icon: <HelpCircle size={18} /> },
@@ -38,6 +43,7 @@ const MENU: MenuItem[] = [
 const ADMIN_MENU: MenuItem[] = [
   { path: '/admin/users', label: '用户管理', icon: <Users size={18} /> },
   { path: '/admin/certs', label: '证书管理', icon: <ShieldCheck size={18} /> },
+  { path: '/admin/automation', label: '自动化', icon: <Zap size={18} /> },
   { path: '/admin/system', label: '系统管理', icon: <Settings2 size={18} /> },
 ];
 

@@ -1,4 +1,7 @@
-import { Input, Segmented, Switch, Tooltip } from 'antd';
+import { Alert, Input, Segmented, Select, Switch, Tooltip } from 'antd';
+import { Link } from 'react-router-dom';
+import { resourceSelectable, type DcvState, type WorkflowResource } from '@api/resources';
+import { useAuthStore } from '@stores/useAuthStore';
 import { Plus, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import SectionHeader from '@components/Layout/SectionHeader';
@@ -8,6 +11,9 @@ import { AUTH_OPTIONS, AUTH_OPTIONS_IP } from '@utils/constants';
 import styles from './Apply.module.css';
 
 const MAX_DOMAINS = 10;
+const VERIFICATION_LABELS: Record<string, string> = {
+  'dns-self': '手动 TXT', 'dns-auto': 'DCV 托管', 'web-self': 'HTTP', 'dns-api': 'DNS 账户',
+};
 
 /**
  * 清理域名输入：
@@ -40,16 +46,22 @@ export function sanitizeIPInput(raw: string): string {
 }
 
 export interface DomainSectionProps {
+  dcv?: DcvState;
+  dnsAccounts: WorkflowResource[];
   domains: DomainRowForm[];
   onChange: (domains: DomainRowForm[]) => void;
   defaultRow: () => DomainRowForm;
 }
 
 export default function DomainSection({
+  dcv,
+  dnsAccounts,
   domains,
   onChange,
   defaultRow,
 }: DomainSectionProps) {
+  const isAdmin = useAuthStore((state) => state.isAdmin);
+  const email = useAuthStore((state) => state.email);
   const updateRow = (id: string, patch: Partial<DomainRowForm>) => {
     onChange(domains.map((d) => (d.id === id ? { ...d, ...patch } : d)));
   };
@@ -160,7 +172,12 @@ export default function DomainSection({
               </div>
 
               <Segmented
-                options={d.isIP ? AUTH_OPTIONS_IP : AUTH_OPTIONS}
+                options={(d.isIP ? AUTH_OPTIONS_IP : [...AUTH_OPTIONS, {value: 'dns-api', label: 'DNS 账户'}]).map((option) => ({
+                  ...option, disabled: option.value === 'dns-auto' && !dcv?.available,
+                  label: <Tooltip title={option.value === 'dns-auto' && !dcv?.available
+                    ? isAdmin ? 'DCV 托管尚未配置，请先完成域名托管设置' : 'DCV 托管尚未启用，请联系管理员'
+                    : option.label}><span tabIndex={option.value === 'dns-auto' && !dcv?.available ? 0 : undefined}>{VERIFICATION_LABELS[option.value] ?? option.label}</span></Tooltip>,
+                }))}
                 value={d.verification}
                 onChange={(v) =>
                   updateRow(d.id, { verification: v as DomainRowForm['verification'] })
@@ -168,6 +185,14 @@ export default function DomainSection({
                 className={styles.verifySeg}
                 block
               />
+              {d.verification === 'dns-api' && <div style={{marginTop: 12}}>
+                <Select aria-label="DNS 账户" style={{width: '100%'}} value={d.dnsAccountId} placeholder="选择 DNS 账户"
+                  options={dnsAccounts.map((account) => ({value: account.id, label: `${account.name} (${account.provider})`,
+                    disabled: !resourceSelectable(account, email, d.domain ? [d.domain] : [])}))}
+                  onChange={(id) => updateRow(d.id, {dnsAccountId: id})}/>
+                <Link to="/domains">管理域名资源</Link>
+              </div>}
+              {d.verification === 'dns-self' && <Alert style={{marginTop: 12}} type="info" showIcon message="手动 TXT 需要在每次续期时更新记录"/>}
             </motion.div>
           ))}
         </AnimatePresence>

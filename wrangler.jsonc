@@ -1,11 +1,13 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "cfworker-acme",
+  "name": "acme",
   "main": "src/cfapp.ts",
-  "compatibility_date": "2025-03-10",
+  "compatibility_date": "2026-01-01",
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "alias": {"cpu-features": "./src/deploy/cpu-features.cjs"},
+  "define": {"__dirname": "\"/\""},
   "vars": {
     "DB_SOURCE": "d1",
     "MAIL_KEYS": "",
@@ -35,17 +37,12 @@
   "d1_databases": [
     {
       "binding": "DB_CF",
-      "database_name": "DB_CF",
-      "database_id": "<database-id>"
+      "database_name": "workacme-db",
+      "database_id": "12ee503a-73d2-454a-940f-f5723037e1d2"
     }
   ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
-  },
-  "triggers": {
-    "crons": [
-      "*/1 * * * *"
-    ]
   }
 }

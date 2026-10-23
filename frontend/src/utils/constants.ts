@@ -95,12 +95,12 @@ export const FLAG_PULSE: Record<
 export const AUTH_MAP: Record<string, string> = {
   'dns-self': 'TXT 手动验证',
   'web-self': 'WEB 手动验证',
-  'dns-auto': 'TXT 自动验证',
+  'dns-auto': 'DCV 托管',
 };
 
 export const AUTH_OPTIONS = [
   { value: 'dns-self', label: 'DNS TXT 手动' },
-  { value: 'dns-auto', label: 'DNS CNAME 自动' },
+  { value: 'dns-auto', label: 'DCV 托管' },
   { value: 'web-self', label: 'WEB 文件验证' },
 ];
 
@@ -120,6 +120,7 @@ export const AUTH_ACT_MAP: Record<string, string> = {
   ca_key: '下载密钥',
   re_new: '续期证书',
   rm_key: '删除密钥',
+  edge_push: '边缘下发',
   ca_del: '吊销证书',
 };
 
@@ -130,7 +131,7 @@ export const TURNSTILE_SITE_KEY = '0x4AAAAAABa7S19lK0Kn_TWK';
 export const GRAVATAR_BASE = 'https://www.gravatar.com/avatar/';
 
 // GitHub 仓库
-export const GITHUB_URL = 'https://github.com/PIKACHUIM/CFWorkerACME';
+export const GITHUB_URL = 'https://github.com/zetxtech/acme-worker';
 
 // 产品信息
 export const APP_NAME = 'CertHub';

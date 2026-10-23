@@ -12,6 +12,12 @@ import {mountAdminConfsRoutes} from "./routes/admin_confs";
 import {mountCertDownloadRoutes} from "./routes/cert_download";
 import {mountOpenApiRoutes} from "./routes/openapi";
 import {mountAccountApiRoutes} from "./routes/account_api";
+import {mountAutomationRoutes} from "./routes/automation";
+import {assertCaAvailable, assertDcvAvailable, caCapabilities, dcvCapability, normalizeDomains, requestedNames} from "./capabilities";
+import {readConf} from "./db/conf";
+import {currentUser} from "./middleware/admin";
+import {mountResourceRoutes} from "./routes/resources";
+import {validateSelections} from "./resources";
 
 // 绑定数据 ###############################################################################
 // DB_SOURCE：空/d1 → Cloudflare D1；mysql → mysql2；prisma → PrismaClient
@@ -22,15 +28,22 @@ export type Bindings = {
     DB_MYSQL_URL?: string, DB_MYSQL_HOST?: string, DB_MYSQL_PORT?: string,
     DB_MYSQL_USER?: string, DB_MYSQL_PASS?: string, DB_MYSQL_NAME?: string,
     DATABASE_URL?: string,
+    AUTOMATION_KEY?: string,
     // 邮件 / 站点 / 鉴权 -------------------------------------------
     MAIL_KEYS: string, MAIL_SEND: string, AUTH_KEYS: string, SITE_KEYS?: string,
     SITE_HOST?: string, SITE_TITLE?: string,
     // DNS 代理 -----------------------------------------------------
     DCV_AGENT: string, DCV_EMAIL: string, DCV_TOKEN: string, DCV_ZONES: string,
+    DCV_API_TOKEN?: string,
     // ACME 账号（各 CA 的 EAB） -----------------------------------
     GTS_keyMC: string, GTS_keyID: string, GTS_KeyTS: string, GTS_useIt: string,
     SSL_keyMC: string, SSL_keyID: string, SSL_KeyTS: string, SSL_useIt: string,
-    ZRO_keyMC: string, ZRO_keyID: string, ZRO_KeyTS: string, ZRO_useIt: string
+    ZRO_keyMC: string, ZRO_keyID: string, ZRO_KeyTS: string, ZRO_useIt: string,
+    // 自动化（边缘证书下发 / 触发器端点）------------------------------
+    // 运行期由 Confs 承载，这里保留可选声明以便通过环境变量做初始种子。
+    EDGE_TARGETS?: string, TRIGGERS?: string, EDGE_STATE?: string, AUTO_LOG?: string,
+    RENEW_DAYS_BEFORE?: string, SCHEDULE_ENABLED?: string,
+    SCHEDULE_INTERVAL_MINUTES?: string, SCHEDULE_JOBS?: string
 }
 export const app = new Hono<{ Bindings: Bindings }>()
 
@@ -57,6 +70,20 @@ mountOpenApiRoutes(app);
 // 用户自助 API token #####################################################################
 mountAccountApiRoutes(app);
 
+// 自动化：边缘证书下发 / 触发器端点 #######################################################
+mountAutomationRoutes(app);
+mountResourceRoutes(app);
+
+app.get('/capabilities', async (c) => {
+    const user = await currentUser(c);
+    if (!user) return c.json({flags: 2, texts: "Authentication required"}, 401);
+    const items = await caCapabilities((name) => readConf(c.env, name));
+    const dcv = await dcvCapability((name) => readConf(c.env, name));
+    return c.json({flags: 0, dcv: {...dcv, missing: Number(user.is_admin) === 1 ? dcv.missing : []}, cas: items.map((item) => ({
+        ...item, missing: Number(user.is_admin) === 1 ? item.missing : [],
+    }))});
+});
+
 // 获取信息 ###############################################################################
 app.get('/users/', async (c: Context): Promise<Response> => {
     return c.json({})
@@ -81,13 +108,10 @@ app.use('/apply/', async (c: Context): Promise<Response> => {
     try {
         let upload_json = await c.req.json();
         let domain_list = upload_json['domains'];
-        let domain_save = []
-        for (let domain in domain_list) {
-            // console.log(domain,domain_list[domain]);
-            domain_list[domain]["flag"] = 0;
-            domain_list[domain]["text"] = "";
-            domain_save.push(domain_list[domain]);
-        }
+        assertCaAvailable(await caCapabilities((name) => readConf(c.env, name)),
+            upload_json.globals?.ca ?? "lets-encrypt", requestedNames(domain_list));
+        let domain_save = normalizeDomains(domain_list);
+        assertDcvAvailable(await dcvCapability((name) => readConf(c.env, name)), domain_save);
 
         // 三重校验：captcha / 月度上限 / 配额 ------------------------------------
         const user_mail = local.getCookie(c, 'mail') ?? "";
@@ -95,6 +119,7 @@ app.use('/apply/', async (c: Context): Promise<Response> => {
         const dao = await ensureDao(c.env as any);
         const userRow = await dao.getUser(user_mail);
         if (!userRow) return c.json({flags: 4, texts: "用户不存在"}, 401);
+        const selectedTargets = await validateSelections(dao, userRow.mail, domain_save, upload_json.targetIds, c.env);
         const {checkApplyGuard} = await import("./middleware/applyGuard");
         const guard = await checkApplyGuard(c, {
             source: "web",
@@ -115,7 +140,7 @@ app.use('/apply/', async (c: Context): Promise<Response> => {
         await saves.insertDB(c.env.DB_CF, "Apply", {
             uuid: uuid,
             mail: local.getCookie(c, 'mail'),
-            sign: upload_json['globals']['ca'],
+            sign: upload_json['globals']['ca'] ?? "lets-encrypt",
             type: upload_json['globals']['encryption'],
             auto: upload_json['globals']['auto_renew'],
             flag: 0,
@@ -127,6 +152,7 @@ app.use('/apply/', async (c: Context): Promise<Response> => {
             next: new Date(new Date().setDate(new Date().getDate() + 7)).getTime(),
             text: "订单提交成功",
         })
+        await dao.upsertConf(`ORDER_DEPLOYMENT:${uuid}`, JSON.stringify(selectedTargets), Date.now());
         // 创建订单后立即推进一次状态机（生成 ACME 订单 + 写入 TXT 挑战记录）
         // 若推进失败（如 ACME 服务端拒绝），把错误原因回显给前端，便于用户即时看到失败原因
         let apply_warn: string | null = null;
@@ -210,7 +236,17 @@ app.use('/order/', async (c: Context): Promise<Response> => {
         //     return c.json({"flags": 6, "texts": "请求订单无效"}, 400);
         if (order_acts == undefined || order_acts === "") { // 获取订单信息 -----------
             let order_save: any = order_uuid == "all" ? order_data : order_data[0];
-            return c.json({"flags": 0, "order": order_save}, 200);
+            // 单个订单附带边缘证书下发状态，便于用户确认证书是否已同步到 CDN
+            let edge_state: Record<string, any> = {};
+            if (order_uuid !== "all" && order_data[0]) {
+                try {
+                    const {readOrderEdgeState} = await import("./edge");
+                    edge_state = await readOrderEdgeState(c.env as Bindings, order_uuid);
+                } catch (e) {
+                    console.error("read order edge state failed:", e);
+                }
+            }
+            return c.json({"flags": 0, "order": order_save, "edge": edge_state}, 200);
         } else { // 对订单执行操作 ----------------------------------------------------------
             if (order_acts === "verify" && order_data[0].flag == 2) {// 提交验证请求
                 await saves.updateDB(c.env.DB_CF, "Apply", {flag: 3}, {uuid: order_uuid})
@@ -232,6 +268,7 @@ app.use('/order/', async (c: Context): Promise<Response> => {
                     let fresh_info: any = (await saves.selectDB(
                         c.env.DB_CF, "Apply", {uuid: {value: order_uuid}}))[0];
                     await opDomain(c.env, order_user, fresh_info, ["all"]);
+                    return c.json({flags: 0, texts: "验证已提交，后续任务将继续推进", order: order_acts});
                 }
                 await certs.processOne(c.env, order_uuid);
             } else if (order_acts === "reload")
@@ -253,6 +290,27 @@ app.use('/order/', async (c: Context): Promise<Response> => {
                 order_acts = order_data[0].keys;
             } else if (order_acts === "re_new") {
                 await saves.updateDB(c.env.DB_CF, "Apply", {flag: 0}, {uuid: order_uuid})
+            } else if (order_acts === "edge_push") {
+                // 手动把当前证书重新下发到所有启用的边缘平台
+                const {pushOrder} = await import("./edge");
+                const results = await pushOrder(c.env as Bindings, order_data[0], {manual: true});
+                const failed = results.filter((r: any) => r.status === "fail");
+                if (failed.length) {
+                    return c.json({
+                        "flags": 10, "texts": "边缘下发失败: " + failed[0].detail,
+                        "order": order_acts, "results": results,
+                    }, 400);
+                }
+                if (results.length === 0) {
+                    return c.json({
+                        "flags": 11, "texts": "没有匹配的边缘下发目标，请先在自动化页面添加",
+                        "order": order_acts,
+                    }, 400);
+                }
+                return c.json({
+                    "flags": 0, "texts": "边缘证书下发完成", "order": order_acts,
+                    "results": results,
+                }, 200);
             } else if (order_acts === "rm_key") {
                 await saves.updateDB(c.env.DB_CF, "Apply", {keys: ""}, {uuid: order_uuid})
             } else if (order_acts === "ca_del") {

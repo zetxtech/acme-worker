@@ -58,6 +58,8 @@ function DomainPanel({
 
   const recordName = `_acme-challenge.${domain.name.replace(/^\*\./, '')}`;
   const recordType = domain.type === 'dns-auto' ? 'CNAME' : 'TXT';
+  const dnsStatus: Record<string, string> = {preparing_records: '等待准备 DNS 记录', access_denied: 'DNS 账户授权已失效，请联系账户所有者', provider_failed: '写入失败，请检查 DNS 账户后重试', waiting_propagation: '等待 DNS 生效',
+    propagated: 'DNS 已生效，等待验证', cleanup_pending: '验证已完成，等待清理记录', cleaned: '验证记录已清理'};
   const recordValue =
     domain.type === 'dns-auto' ? domain.auto || '-' : domain.auth || '-';
 
@@ -110,13 +112,16 @@ function DomainPanel({
           >
             <div className={styles.domainPanelInner}>
               <div className={styles.hint}>
-                请在您的 DNS 提供商中添加以下记录以完成验证：
+                {domain.type === 'dns-api' ? dnsStatus[domain.dnsStatus ?? ''] ?? '等待自动验证'
+                  : domain.type === 'web-self' ? '请将验证内容保存到以下地址：' : '请在您的 DNS 提供商中添加以下记录以完成验证：'}
               </div>
 
               <div className={styles.dnsTable}>
-                <DnsRow label="记录类型" value={recordType} />
-                <DnsRow label="记录名称" value={recordName} />
+                <DnsRow label="记录类型" value={domain.type === 'web-self' ? 'HTTP-01' : recordType} />
+                <DnsRow label={domain.type === 'web-self' ? '验证地址' : '记录名称'} value={domain.type === 'web-self'
+                  ? `http://${domain.name}/.well-known/acme-challenge/${domain.token ?? ''}` : recordName} />
                 <DnsRow label="记录值" value={recordValue} mono />
+                {domain.type === 'dns-api' && <DnsRow label="DNS 账户" value={domain.dnsAccountId ?? '-'}/>}
                 <DnsRow
                   label="验证命令"
                   value={`nslookup -q=${recordType} ${recordName}`}
