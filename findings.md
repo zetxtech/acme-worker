@@ -1,5 +1,10 @@
 # Findings
 
+## Actual Remaining Issuance Root Cause (2026-10-27)
+- DoH response shapes differ: Cloudflare returned quoted TXT presentation strings, while Google returned unquoted decoded strings. Identical quoted mocks for both providers concealed the compatibility bug. Both providers had the correct public records, but the strict function incorrectly returned false.
+- Decode both formats while retaining exact matching, no trimming of decoded unquoted values, validated quoted chunks and independent confirmation by both resolvers. Do not reset credentials or propagation timers before comparing actual wire response shapes.
+- Production release 1b4a562a-5062-4e8c-a74a-0917b3be2673 completed the original two-domain request. Actual certificate parsing, hostname coverage, validity, private key match and leaf signature verification passed. It expires on 2027-01-25; temporary probes were removed.
+
 ## Background Lifecycle Repair (2026-10-27)
 - The submission handler awaited the ACME/DNS state machine. The modify and cancel operations shared a hard-delete branch. The state machine stopped between persisted stages, and the detail page did not poll. These were business-flow defects, not just missing loading messages.
 - A transformed PageShell trapped descendant fixed overlays. Body-level portals now cover the entire layout while the short acceptance request is pending; long CA/DNS work never holds that overlay open.

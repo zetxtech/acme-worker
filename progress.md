@@ -1,5 +1,13 @@
 # Progress
 
+## Live DNS Compatibility Fix And Issuance: 2026-10-27
+- The remaining request was not waiting for real propagation: a read-only Cloudflare probe confirmed both expected TXT values at Cloudflare and Google. Cloudflare returned quoted presentation strings; Google returned decoded, unquoted strings. The quote-only parser discarded Google's valid response, so the two-resolver gate stayed false until timeout.
+- Added a failing regression using those distinct response shapes, then fixed TXT decoding without relaxing exact value, whitespace or two-resolver confirmation checks. Quoted multi-chunk TXT remains supported and extra trailing content is rejected.
+- Validation: 38 relevant backend tests passed; the three previously accepted local-runtime/UI cases were not rerun for this backend-only patch. The real Cloudflare probe changed from two false production-function results to two true results using the same records; it was deleted after both runs.
+- Deployed 1b4a562a-5062-4e8c-a74a-0917b3be2673 through the verified publisher. Homepage/assets 200, database healthy, anonymous apply 401, original D1, encryption key, workflow binding and 31 DNS services retained.
+- Resumed original request YAARBFBDR6K69HSK once without recreating it or changing DNS configuration. It reached flag=5 and work=complete. The actual certificate covers zetx.tech and *.zetx.tech; private key matching, current validity and the leaf/intermediate signature check passed. Issuer: Let's Encrypt YE1. Expires 2027-01-25T10:02:50Z. Private material was checked in process and not written to files, logs or the repository.
+- The owner created https://github.com/zetxtech/acme-worker.git; scoped OpenSSL/HTTP1.1 Git access now succeeds without changing global configuration. This fix follows the already committed background workflow history.
+
 ## Final Background Workflow Acceptance: 2026-10-27
 - Final lifecycle regression: 40/40 passed, failed 0, skipped 0. Actual local workerd alarms advanced persisted synthetic stages after submission ended; actual SSH/SFTP fixture integration and desktop/mobile Chrome flows were enabled. Provider/CA fixture results are not claims of live account issuance.
 - Browser assertions cover a body-level submission overlay over the sidebar, no manual process/verify controls for automated DNS, prefilled same-ID editing, cancel-edit recovery, list/detail automatic refresh, mobile bounds, section gaps and compact no-target deployment state.

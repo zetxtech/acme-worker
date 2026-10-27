@@ -207,6 +207,32 @@ test("propagation requires exact TXT values from both resolvers", async () => {
     } finally { globalThis.fetch = original; }
 });
 
+test('TXT propagation accepts Google decoded strings and Cloudflare presentation strings', async () => {
+    const original = globalThis.fetch;
+    const expected = 'a'.repeat(43);
+    let cloudflare = `"${expected}"`;
+    let google = expected;
+    const checked: string[] = [];
+    globalThis.fetch = (async (input: any) => {
+        const resolver = new URL(String(input)).hostname;
+        checked.push(resolver);
+        return Response.json({Status: 0, Answer: [{type: 16, data: resolver === 'dns.google' ? google : cloudflare}]});
+    }) as any;
+    try {
+        assert.equal(await txtPropagated('_acme-challenge.example.com', expected), true);
+        assert.deepEqual(checked, ['cloudflare-dns.com', 'dns.google']);
+        cloudflare = `"${expected.slice(0, 20)}" "${expected.slice(20)}"`;
+        assert.equal(await txtPropagated('_acme-challenge.example.com', expected), true);
+        google = expected + 'wrong';
+        assert.equal(await txtPropagated('_acme-challenge.example.com', expected), false);
+        google = ' ' + expected;
+        assert.equal(await txtPropagated('_acme-challenge.example.com', expected), false);
+        google = expected;
+        cloudflare = `"${expected}" unexpected`;
+        assert.equal(await txtPropagated('_acme-challenge.example.com', expected), false);
+    } finally { globalThis.fetch = original; }
+});
+
 test('public DNS lookup failures are distinguishable from pending propagation', async () => {
     const original = globalThis.fetch;
     globalThis.fetch = (async () => new Response('temporarily unavailable', {status: 503})) as any;

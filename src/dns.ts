@@ -147,6 +147,17 @@ export class DnsProvider {
     }
 }
 
+function decodeTxtAnswer(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const presentation = value.trim();
+    if (!presentation.startsWith('"')) return value;
+    const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+    const chunks = presentation.match(pattern);
+    if (!chunks || presentation.replace(pattern, '').trim()) return null;
+    try { return chunks.map((chunk) => JSON.parse(chunk)).join(''); }
+    catch { return null; }
+}
+
 export async function txtPropagated(name: string, expected: string): Promise<boolean> {
     for (const resolver of ["https://cloudflare-dns.com/dns-query", "https://dns.google/resolve"]) {
         const response = await fetch(`${resolver}?${new URLSearchParams({name, type: "TXT"})}`, {
@@ -154,9 +165,7 @@ export async function txtPropagated(name: string, expected: string): Promise<boo
         });
         if (!response.ok) throw new Error(`Public DNS query failed (${new URL(resolver).hostname}, HTTP ${response.status})`);
         const data = await readBoundedJson(response);
-        const matched = data.Answer?.some((record: any) => record.type === 16
-            && (String(record.data).match(/"([^"\\]*(?:\\.[^"\\]*)*)"/g) ?? [])
-                .map((part: string) => part.slice(1, -1)).join("") === expected);
+        const matched = data.Answer?.some((record: any) => record.type === 16 && decodeTxtAnswer(record.data) === expected);
         if (!matched) return false;
     }
     return true;
