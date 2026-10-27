@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { App, Button, Form, Spin, Tag } from 'antd';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Alert, App, Button, Form, Tag } from 'antd';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft,
@@ -14,10 +14,11 @@ import {
 } from 'lucide-react';
 import PageShell from '@components/Layout/PageShell';
 import Kaomoji from '@components/molecules/Kaomoji';
+import Loading from '@components/molecules/Loading';
 import Pill from '@components/atoms/Pill';
 import CodeInline from '@components/atoms/CodeInline';
 import CertCaptcha from '@components/molecules/CertCaptcha';
-import { applyCert, fetchApplyQuota } from '@api/order';
+import { applyCert, beginOrderEdit, endOrderEdit, fetchApplyQuota, getOrder } from '@api/order';
 import type { ApplyPayload, DomainItem } from '@api/types';
 import { useBootstrapStore } from '@stores/useBootstrapStore';
 import { useAuthStore } from '@stores/useAuthStore';
@@ -74,6 +75,10 @@ const STEPS = [
 
 export default function Apply() {
   const navigate = useNavigate();
+  const editId = new URLSearchParams(useLocation().search).get('edit') || undefined;
+  const editSession = useRef<string>();
+  const [initializing, setInitializing] = useState(!!editId);
+  const [loadFailed, setLoadFailed] = useState(false);
   const { message, modal } = App.useApp();
   const bootstrap = useBootstrapStore((s) => s.info);
   const email = useAuthStore((s) => s.email);
@@ -85,7 +90,7 @@ export default function Apply() {
   const [submitting, setSubmitting] = useState(false);
 
   // 人机验证 token（仅在后端开启时必填）
-  const captchaEnabled = !!bootstrap?.cert_captcha?.enabled;
+  const captchaEnabled = !editId && !!bootstrap?.cert_captcha?.enabled;
   const [captchaToken, setCaptchaToken] = useState('');
 
   // 配额 / 月度上限
@@ -115,7 +120,7 @@ export default function Apply() {
 
   const [state, setState] = useState<FormState>({
     targetIds: [],
-    domains: [DEFAULT_DOMAIN()],
+    domains: editId ? [] : [DEFAULT_DOMAIN()],
     ca: 'lets-encrypt',
     auto_renew: true,
     encryption: 'eccp256',
@@ -123,15 +128,44 @@ export default function Apply() {
   });
 
   useEffect(() => {
-    Promise.all([fetchCapabilities(), fetchResources('dns'), fetchResources('targets')]).then(([cas, dns, deploy]) => {
+    let active = true;
+    let revision: string | undefined;
+    setInitializing(!!editId);
+    setLoadFailed(false);
+    editSession.current = undefined;
+    const original = editId ? beginOrderEdit(editId).then((value) => {
+      revision = value;
+      if (active) editSession.current = value;
+      else void endOrderEdit(editId, value).catch(() => {});
+      return getOrder(editId);
+    }) : Promise.resolve(undefined);
+    Promise.all([fetchCapabilities(), fetchResources('dns'), fetchResources('targets'), original]).then(([cas, dns, deploy, previousOrder]) => {
+      if (!active) return;
       setCapabilities(cas.cas);
       setDcv(cas.dcv);
       setDnsAccounts(dns.items);
       setTargets(deploy.items);
-      setState((previous) => ({...previous, ca: cas.cas.find((item) => item.available && item.id === previous.ca)?.id
+      if (previousOrder) {
+        const grouped = new Map<string, DomainRowForm>();
+        for (const domain of previousOrder.list) {
+          const base = domain.name.replace(/^\*\./, '');
+          const key = [base, domain.type, domain.dnsAccountId ?? ''].join('|');
+          const row = grouped.get(key) ?? {...DEFAULT_DOMAIN(), domain: base, verification: domain.type as DomainRowForm['verification'],
+            dnsAccountId: domain.dnsAccountId, includeRoot: false, isIP: !!domain.isIP};
+          if (domain.name.startsWith('*.')) row.wildcard = true; else row.includeRoot = true;
+          grouped.set(key, row);
+        }
+        setState({domains: [...grouped.values()], targetIds: previousOrder.targetIds ?? [], ca: previousOrder.sign,
+          encryption: previousOrder.type, auto_renew: !!previousOrder.auto,
+          subject: {country: previousOrder.main.C, province: previousOrder.main.S, city: previousOrder.main.ST,
+            organization: previousOrder.main.O, unit: previousOrder.main.OU}});
+        setStep(0);
+      } else setState((previous) => ({...previous, ca: cas.cas.find((item) => item.available && item.id === previous.ca)?.id
         ?? cas.cas.find((item) => item.available)?.id ?? ''}));
-    }).catch(() => message.error('无法读取证书厂商和资源，请刷新后重试'));
-  }, []);
+    }).catch(() => { if (active) { setLoadFailed(true); message.error('无法读取申请或资源，请刷新后重试'); } })
+      .finally(() => { if (active) setInitializing(false); });
+    return () => { active = false; if (editId && revision) void endOrderEdit(editId, revision).catch(() => {}); };
+  }, [editId]);
 
   const updateDomains = (domains: DomainRowForm[]) =>
     setState((s) => ({ ...s, domains }));
@@ -208,6 +242,7 @@ export default function Apply() {
   };
 
   const handleSubmit = async () => {
+    if (initializing || loadFailed) return;
     if (!validateStep(0)) return;
     if (!compatibleCapabilities.some((item) => item.id === state.ca && item.available)) {
       message.error('请选择当前可用且适合此申请的证书厂商'); return;
@@ -221,7 +256,7 @@ export default function Apply() {
       return;
     }
     // 客户端配额/月度软校验（最终以服务端返回为准） -------------
-    if (quotaInfo) {
+    if (!editId && quotaInfo) {
       if (
         quotaInfo.monthly_limit > 0 &&
         quotaInfo.month_used >= quotaInfo.monthly_limit
@@ -295,6 +330,8 @@ export default function Apply() {
       const { uuid, warning } = await applyCert(
         payload,
         captchaEnabled ? captchaToken : undefined,
+        editId,
+        editSession.current,
       );
       if (warning) {
         // 后端已创建订单，但 ACME 推进失败：用弹窗展示完整错误原因，确认后展示订单详情
@@ -326,8 +363,8 @@ export default function Apply() {
           width: 560,
         });
       } else {
-        message.success('申请提交成功 ✨');
-        setTimeout(() => navigate(`/order/${uuid}`), 600);
+        message.success(editId ? '更改已受理，申请编号不变' : '申请已受理，后台将自动处理');
+        navigate(`/order/${uuid}`);
       }
     } catch (e: any) {
       message.error(e?.texts || e?.message || '申请失败');
@@ -338,6 +375,11 @@ export default function Apply() {
 
   return (
     <PageShell>
+      {editId && <Alert type={loadFailed ? 'error' : 'info'} showIcon style={{marginBottom: 20}}
+        message={loadFailed ? '未能读取原申请，尚未保存更改' : '编辑申请'}
+        description="保存前不会更改或删除原申请；取消编辑后恢复后台处理。"
+        action={<Button onClick={() => navigate(`/order/${encodeURIComponent(editId)}`)}>取消编辑</Button>}/>}
+      {initializing && <Loading full overlay text="正在读取原申请"/>}
       {/* 步骤指示器 */}
       <div className={styles.steps}>
         {STEPS.map((s, i) => (
@@ -451,7 +493,7 @@ export default function Apply() {
                 icon={<Send size={14} />}
                 disabled={captchaEnabled && !captchaToken}
               >
-                提交申请
+                {editId ? '保存更改' : '提交申请'}
               </Button>
             )}
           </div>
@@ -593,12 +635,7 @@ export default function Apply() {
       </div>
 
       {/* 提交中全屏遮罩 ===================================== */}
-      <Spin
-        spinning={submitting}
-        fullscreen
-        size="large"
-        tip="正在提交申请，请稍候..."
-      />
+      {submitting && <Loading full overlay text={editId ? '正在保存更改' : '正在提交申请'}/>}
     </PageShell>
   );
 }

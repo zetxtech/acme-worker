@@ -13,6 +13,7 @@ import {testTarget} from "../edge";
 import {dnsCatalog, dnsVerificationMatches} from "../lego/registry";
 import shardBuilds from "../lego-shards.generated.json";
 import {dcvCapability, requestedNames} from "../capabilities";
+import {queueOrder} from "../order-workflow";
 
 export function mountResourceRoutes(app: Hono<{Bindings: Bindings}>) {
     app.use("/resources/*", async (c, next) => {
@@ -177,6 +178,7 @@ export function mountResourceRoutes(app: Hono<{Bindings: Bindings}>) {
             const {targetIds} = await c.req.json();
             const ids = await validateSelections(dao, row.mail, JSON.parse(row.list), targetIds, c.env);
             await dao.upsertConf(`ORDER_DEPLOYMENT:${row.uuid}`, JSON.stringify(ids), Date.now());
+            if (Number(row.flag) === 5 && ids.length) await queueOrder(c.env, row.uuid, "deploy");
             return c.json({flags: 0});
         } catch (error) { return c.json({flags: 3, texts: (error as Error).message}, 400); }
     });
@@ -186,7 +188,17 @@ export function mountResourceRoutes(app: Hono<{Bindings: Bindings}>) {
             const dao = await ensureDao(c.env);
             const row = await dao.getApply(c.req.param("uuid"));
             if (!row || row.mail !== user.mail && Number(user.is_admin) !== 1) return c.json({flags: 9}, 404);
-            return c.json({flags: 0, items: await pushSelectedOrder(c.env, row, {targetId: c.req.param("targetId"), manual: true})});
+            if (Number(row.flag) !== 5) return c.json({flags: 3, texts: "证书尚未签发"}, 409);
+            const targetId = c.req.param("targetId");
+            const selected: string[] = JSON.parse(await dao.getConf(`ORDER_DEPLOYMENT:${row.uuid}`) ?? "[]");
+            if (!selected.includes(targetId)) return c.json({flags: 9, texts: "目标不属于此申请"}, 404);
+            const stateKey = `DEPLOY_STATE:${row.uuid}:${targetId}`;
+            const previous = JSON.parse(await dao.getConf(stateKey) ?? 'null');
+            if (previous?.status === 'ok') return c.json({flags: 0, items: await deploymentStates(dao, row.uuid)});
+            await dao.upsertConf(stateKey, JSON.stringify({...previous, targetId, name: previous?.name ?? targetId,
+                status: 'pending', attempts: previous?.attempts ?? 0, nextAttempt: 0, updatedAt: Date.now(), detail: '已安排后台重试'}), Date.now());
+            await queueOrder(c.env, row.uuid, "deploy", undefined, targetId);
+            return c.json({flags: 0, texts: "已安排后台部署", items: await deploymentStates(dao, row.uuid)}, 202);
         } catch (error) { return c.json({flags: 3, texts: (error as Error).message}, 400); }
     });
 }

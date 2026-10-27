@@ -108,6 +108,7 @@ export interface Dao {
     getConf(name: string): Promise<string | null>;
     listConfs(): Promise<ConfRow[]>;
     upsertConf(name: string, data: string, time: number): Promise<void>;
+    updateConfIfUnchanged?(name: string, previous: string, next: string, time: number): Promise<boolean>;
     deleteConf(name: string): Promise<void>;
     claimConfLease?(name: string, token: string, expiresAt: number, now: number): Promise<boolean>;
     releaseConfLease?(name: string, token: string): Promise<void>;

@@ -22,6 +22,21 @@ function manifestHash(shard) {
         providers: shard.providers, verifiedProviders: shard.verifiedProviders ?? []})).digest("hex");
 }
 
+export async function verifierFetch(url, options, request = fetch) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const response = await request(url, {...options, signal: AbortSignal.timeout(45000)});
+            if ([502, 503, 504].includes(response.status) && attempt < 2) {
+                await response.body?.cancel();
+                continue;
+            }
+            return response;
+        } catch (error) {
+            if (attempt === 2) throw new Error('Remote verifier connection failed after bounded retries; main Worker unchanged', {cause: error});
+        }
+    }
+}
+
 export function mainDeploymentConfig(config, projectRoot, configDirectory, services) {
     const configPath = (path) => relative(configDirectory, resolve(projectRoot, path)).replaceAll("\\", "/");
     const bindings = new Set(services.map((service) => service.binding));
@@ -65,7 +80,7 @@ async function deploy() {
     const token = process.env.CLOUDFLARE_API_TOKEN;
     if (!/^[a-f0-9]{32}$/.test(account ?? "") || !token) throw new Error("Existing Cloudflare account and API token environment are required");
     const api = async (path, method = "GET") => {
-        const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}${path}`, {
+        const response = await verifierFetch(`https://api.cloudflare.com/client/v4/accounts/${account}${path}`, {
             method, headers: {Authorization: `Bearer ${token}`}, signal: AbortSignal.timeout(30000),
         });
         const body = await response.json();
@@ -144,8 +159,8 @@ async function deploy() {
         if (inventoryServices.length) {
             let inventoryResponse;
             for (let attempt = 0; attempt < 4; attempt++) {
-                inventoryResponse = await fetch(checkUrl.replace("/check", `/inventory?attempt=${attempt}`), {
-                    method: "POST", headers: {"Cache-Control": "no-cache"}, signal: AbortSignal.timeout(45000),
+                inventoryResponse = await verifierFetch(checkUrl.replace("/check", `/inventory?attempt=${attempt}`), {
+                    method: "POST", headers: {"Cache-Control": "no-cache"},
                 });
                 if (inventoryResponse.status !== 404) break;
                 await inventoryResponse.body?.cancel();
@@ -168,8 +183,8 @@ async function deploy() {
         let response;
         let responseText = "";
         for (let attempt = 0; attempt < 4; attempt++) {
-            response = await fetch(`${checkUrl}?attempt=${attempt}`, {
-                method: "POST", headers: {"Cache-Control": "no-cache"}, signal: AbortSignal.timeout(45000),
+            response = await verifierFetch(`${checkUrl}?attempt=${attempt}`, {
+                method: "POST", headers: {"Cache-Control": "no-cache"},
             });
             responseText = await response.text();
             if (response.status !== 404) break;

@@ -3,20 +3,22 @@ import styles from './Order.module.css';
 
 export interface OrderProgressProps {
   flag: number;
+  label?: string;
+  cancelled?: boolean;
 }
 
 // 状态阶段顺序：0 等待 → 1 创建 → 2 待验证 → 3 验证中 → 4 申请中 → 5 完成
 const STAGES = [
   { flag: 0, label: '等待中' },
   { flag: 1, label: '创建中' },
-  { flag: 2, label: '待验证' },
+  { flag: 2, label: '域名验证' },
   { flag: 3, label: '验证中' },
   { flag: 4, label: '申请中' },
   { flag: 5, label: '已完成' },
 ];
 
-export default function OrderProgress({ flag }: OrderProgressProps) {
-  const isFailed = flag === -1;
+export default function OrderProgress({ flag, label, cancelled = false }: OrderProgressProps) {
+  const isFailed = flag === -1 && !cancelled;
 
   return (
     <div className={styles.progressWrap}>
@@ -29,7 +31,7 @@ export default function OrderProgress({ flag }: OrderProgressProps) {
               isFailed ? 'err' : flag === 5 ? 'ok' : flag >= 3 ? 'warn' : 'info'
             }
           >
-            {FLAG_MAP[flag] || '未知'}
+            {label || FLAG_MAP[flag] || '未知'}
           </strong>
         </span>
       </div>

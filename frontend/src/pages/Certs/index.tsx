@@ -96,13 +96,13 @@ export default function Certs() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
-      const data = await listOrders();
+      const data = await listOrders(silent);
       setOrders(data || []);
     } catch {
-      setOrders([]);
+      if (!silent && !orders.length) setOrders([]);
     } finally {
       setLoading(false);
     }
@@ -111,6 +111,20 @@ export default function Certs() {
   useEffect(() => {
     load();
   }, []);
+
+  const watching = orders.some((order) => order.work?.intent === 'edit' || ['queued', 'running', 'waiting'].includes(order.work?.status ?? '')
+    || order.flag >= 0 && order.flag < 5 && !['action_required', 'failed', 'cancelled'].includes(order.work?.status ?? ''));
+  useEffect(() => {
+    if (!watching) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (!document.hidden && navigator.onLine) await load(true);
+      if (!stopped) timer = setTimeout(poll, 8000);
+    };
+    timer = setTimeout(poll, 4000);
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [watching]);
 
   const filtered = useMemo(() => {
     return orders.filter((o) => {
@@ -477,7 +491,7 @@ function OrderCard({
         <div className={styles.cardStatus}>
           <StatusPulse status={pulseStatus} size={8} />
           <Pill variant={colorVariant} size="xs" solid={isSigned}>
-            {STATUS_TEXT[status] || FLAG_MAP[order.flag] || '未知'}
+            {order.work?.status === 'cancelled' ? '已取消' : STATUS_TEXT[status] || FLAG_MAP[order.flag] || '未知'}
           </Pill>
         </div>
         <div className={styles.uuidRow}>
@@ -649,7 +663,7 @@ function OrderRow({
       </div>
       <div className={styles.listStatusPill}>
         <Pill variant={colorVariant} size="xs" solid={isSigned}>
-          {STATUS_TEXT[status] || FLAG_MAP[order.flag]}
+          {order.work?.status === 'cancelled' ? '已取消' : STATUS_TEXT[status] || FLAG_MAP[order.flag]}
         </Pill>
       </div>
       <div className={styles.uuidRow}>

@@ -46,6 +46,13 @@ export function classifyFlag(o: OrderRaw): OrderStatus {
   if (o.flag === -1) return 'failed';
   if (o.flag === 5) return isSignedExpired(o) ? 'expired' : 'signed';
   if (o.flag === 3 || o.flag === 4) return 'verifying';
+  if (o.flag === 2 && o.work?.status !== 'action_required') {
+    try {
+      const domains = typeof o.list === 'string' ? JSON.parse(o.list) : o.list;
+      if (domains?.length && domains.every((domain: any) => domain.type === 'dns-api'
+        || domain.type === 'dns-auto' && domain.dnsStatus !== 'waiting_delegation')) return 'verifying';
+    } catch {}
+  }
   // 0/1/2
   if (isPendingTimeout(o)) return 'failed';
   return 'pending';

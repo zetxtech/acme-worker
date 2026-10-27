@@ -207,6 +207,13 @@ test("propagation requires exact TXT values from both resolvers", async () => {
     } finally { globalThis.fetch = original; }
 });
 
+test('public DNS lookup failures are distinguishable from pending propagation', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => new Response('temporarily unavailable', {status: 503})) as any;
+    try { await assert.rejects(txtPropagated('example.com', 'synthetic-value'), /Public DNS query failed/); }
+    finally { globalThis.fetch = original; }
+});
+
 test("manual, delegated and API DNS selections enforce immediate resource scope", async () => {
     const account = {owner: "user@example.com", grants: [], enabled: true, zones: ["example.com"]};
     const dao = {getConf: async () => JSON.stringify(account)} as any;
@@ -236,7 +243,10 @@ test("registered CA accounts reuse the same private key and account URL", async 
     assert.equal(second.options.externalAccountBinding, undefined);
     await assert.rejects(registeredClient(dao, {...options, accountKey: "fixture-fresh-key"}, "third@example.com",
         (clientOptions: any) => ({...create(clientOptions), createAccount: async () => { throw new Error("spent eab secret"); }})),
-    /External Account Binding is consumed/);
+    /initial EAB credentials/);
+    await assert.rejects(registeredClient(dao, {...options, accountKey: 'fixture-other-key', externalAccountBinding: undefined}, 'first@example.com',
+        (clientOptions: any) => ({...create(clientOptions), createAccount: async () => { throw new Error('connection timed out'); }})),
+    (error: Error) => error.message === 'connection timed out');
 });
 
 test("deployment destinations reject private addresses and URL credential tricks", async () => {
@@ -248,6 +258,30 @@ test("deployment destinations reject private addresses and URL credential tricks
     }
     assert.equal(publicHttps("https://deploy.example.com/cert").hostname, "deploy.example.com");
     await assert.rejects(boundedResponse(new Response("x".repeat(100)), 10));
+});
+
+test('concurrent background requests register a shared CA account only once', async () => {
+    const database = memoryD1();
+    const dao = new D1Dao(database as any);
+    let registrations = 0;
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const options = {directoryUrl: 'https://ca.example/directory', accountKey: 'synthetic-shared-key', externalAccountBinding: {kid: 'once', hmacKey: 'synthetic'}};
+    const create = (settings: any) => ({settings, createAccount: async () => { registrations++; entered(); await gate; },
+        getAccountUrl: () => 'https://ca.example/acct/shared'});
+    try {
+        const first = registeredClient(dao, options, 'first@example.com', create);
+        await started;
+        await assert.rejects(registeredClient(dao, options, 'second@example.com', create), /initialization is busy/);
+        release();
+        await first;
+        const reused = await registeredClient(dao, options, 'second@example.com', create);
+        assert.equal(registrations, 1);
+        assert.equal(reused.settings.accountUrl, 'https://ca.example/acct/shared');
+        assert.equal(reused.settings.externalAccountBinding, undefined);
+    } finally { release?.(); database.close(); }
 });
 
 test("HTTPS hooks carry authentication, signed timestamp and stable version without redirects", async () => {
@@ -533,11 +567,91 @@ test("real web/API routes reject unavailable CA and ungranted resources before s
         assert.equal(denied.status, 400);
         assert.equal((await dao.listApplies()).total, 0);
         const accepted = await app.request("http://localhost/api/v1/orders", {method: "POST", headers: apiHeaders, body: JSON.stringify(request)}, env);
-        assert.equal(accepted.status, 200);
+        assert.equal(accepted.status, 202);
         assert.equal((await dao.listApplies()).total, 1);
         const removed = await app.request(`http://localhost/resources/dns/${view.item.id}`, {method: "DELETE", headers: webHeaders}, env);
         assert.equal(removed.status, 409);
     } finally { _resetDaoForTests(); invalidateAll(); database.close(); }
+});
+
+test("orders are accepted for background execution and modify never deletes the request", async () => {
+    _resetDaoForTests(); invalidateAll();
+    const database = memoryD1();
+    const dao = new D1Dao(database as any);
+    const scheduled: string[] = [];
+    const env: any = {DB_CF: database, DB_SOURCE: "d1", ORDER_WORKFLOW: {
+        idFromName: (name: string) => name,
+        get: (name: string) => ({fetch: async () => { scheduled.push(name); return Response.json({accepted: true}); }}),
+    }};
+    const {app} = await import("../src/index");
+    await dao.insertUser({mail: "background@example.com", pass: "fixture-session-key", apis: "fixture-api", keys: "never-used-fixture-key", flag: "1", is_admin: 0, quota: -1});
+    const signer = new Hono();
+    signer.get("/", async (context) => { await setSignedCookie(context, "auth", "fixture-session", "fixture-session-key"); return context.text("ok"); });
+    const cookie = (await signer.request("http://localhost/")).headers.get("set-cookie")!.split(";")[0];
+    const headers = {"Content-Type": "application/json", Cookie: `mail=background%40example.com; ${cookie}`};
+    const originalFetch = globalThis.fetch;
+    let externalCalls = 0;
+    globalThis.fetch = (async () => { externalCalls++; throw new Error("External work must not run in the submission request"); }) as any;
+    try {
+        const response = await app.request("http://localhost/apply/", {method: "POST", headers,
+            body: JSON.stringify({domains: [{name: "example.com", type: "dns-self"}], subject: {}, globals: {ca: "lets-encrypt", encryption: "eccp256", auto_renew: 1}})}, env);
+        assert.equal(response.status, 202, await response.clone().text());
+        const body: any = await response.json();
+        assert.equal(body.flags, 0);
+        assert.equal((await dao.getApply(body.order))?.flag, 0);
+        assert.deepEqual(scheduled, [body.order]);
+        assert.equal(externalCalls, 0);
+        await app.request(`http://localhost/order/?id=${body.order}&op=modify`, {headers}, env);
+        assert.ok(await dao.getApply(body.order), "Changing an application must never delete its original request");
+        const original = (await dao.getApply(body.order))!;
+        const {runOrderStep, readOrderWork} = await import('../src/order-workflow');
+        const pause = await app.request(`http://localhost/apply/${body.order}/edit`, {method: 'POST', headers, body: '{}'}, env);
+        const session: any = await pause.json();
+        assert.equal(pause.status, 202);
+        await runOrderStep(env, body.order, async () => { throw new Error('Editing must pause external processing'); });
+        assert.equal((await readOrderWork(dao, body.order))!.status, 'action_required');
+        assert.ok((await readOrderWork(dao, body.order))!.nextRun > Date.now());
+        const edit = {domains: [{name: "updated.example.org", type: "dns-self"}], subject: {O: "Updated"},
+            globals: {ca: "lets-encrypt", encryption: "eccp384", auto_renew: false}, targetIds: [], editRevision: session.revision};
+        const edited = await app.request(`http://localhost/apply/${body.order}`, {method: "PUT", headers, body: JSON.stringify(edit)}, env);
+        assert.equal(edited.status, 202);
+        assert.equal((await edited.json() as any).order, body.order);
+        assert.equal((await dao.getApply(body.order))!.list, original.list);
+        await runOrderStep(env, body.order, async () => []);
+        const updated = (await dao.getApply(body.order))!;
+        assert.equal(updated.uuid, original.uuid);
+        assert.equal(updated.time, original.time);
+        assert.equal(JSON.parse(updated.list)[0].name, "updated.example.org");
+        assert.equal(updated.type, "eccp384");
+        const cancelled = await app.request(`http://localhost/order/?id=${body.order}&op=cancel`, {headers}, env);
+        assert.equal(cancelled.status, 202);
+        await runOrderStep(env, body.order, async () => { throw new Error("Cancelled work must not call the CA"); });
+        assert.ok(await dao.getApply(body.order));
+        assert.equal((await dao.getApply(body.order))!.flag, -1);
+        const listed: any = await (await app.request('http://localhost/order/?id=all', {headers}, env)).json();
+        assert.equal(listed.order[0].work.status, 'cancelled');
+    } finally { globalThis.fetch = originalFetch; _resetDaoForTests(); invalidateAll(); database.close(); }
+});
+
+test("workerd durable alarms finish a queued request without a browser driving processing", {skip: !process.env.WORKFLOW_WORKER_SMOKE_URL, timeout: 45000}, async () => {
+    const origin = process.env.WORKFLOW_WORKER_SMOKE_URL!;
+    const schema = readFileSync(new URL('../schema.set.sql', import.meta.url), 'utf8');
+    const statements = schema.split(';').map((statement) => statement.trim()).filter(Boolean);
+    const accepted = await fetch(`${origin}/seed`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({statements})});
+    assert.equal(accepted.status, 202, await accepted.clone().text());
+    const observed = new Set<number>();
+    const deadline = Date.now() + 30000;
+    let result: any;
+    while (Date.now() < deadline) {
+        result = await (await fetch(`${origin}/status`)).json();
+        observed.add(result.flag);
+        if (result.work?.status === 'complete') break;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+    assert.equal(result.flag, 5, JSON.stringify(result));
+    assert.equal(result.work.status, 'complete');
+    assert.equal(result.work.nextRun, 0);
+    assert.ok(observed.size >= 3);
 });
 
 test("delegated targets are stable and custom patterns cannot escape the administrator zone", () => {
@@ -740,6 +854,15 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
     let dnsEntered: (() => void) | undefined;
     let failResourceLoad = false;
     let failResourceSave = false;
+    let fixturePayload: any;
+    let fixtureFlag = 2;
+    let editingOrder = false;
+    let allowCompletion = false;
+    let completionPolls = 0;
+    let releaseSubmission!: () => void;
+    let submissionEntered!: () => void;
+    const submissionGate = new Promise<void>((resolve) => { releaseSubmission = resolve; });
+    const submissionStarted = new Promise<void>((resolve) => { submissionEntered = resolve; });
     const resource = (id: string, name: string, provider: string) => ({id, name, provider, kind: provider === "cloudflare" || provider.startsWith("lego:") ? "DNS_ACCOUNT" : "DEPLOY_TARGET",
         owner: "fixture@example.org", grants: [], zones: ["example.com"], enabled: true, config: {}, credentialsConfigured: true});
     const resources: Record<string, any[]> = {dns: [resource("dns-one", "Example DNS", "cloudflare")],
@@ -761,9 +884,40 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         {id: "zeroca-trust", name: "ZeroSSL", available: false, wildcard: true, reason: "disabled", missing: [], pricing: "free-acme", registered: false},
         {id: "sslcom-trust", name: "SSL.com", available: true, wildcard: false, reason: "ready", missing: [], pricing: "product-dependent", registered: true},
     ]}}));
-    await page.route("**/apply/", async (route) => { calls.push({path: "/apply/", method: "POST", body: route.request().postDataJSON()}); await route.fulfill({json: {flags: 0, order: "fixture-order"}}); });
-    await page.route("**/order/**", (route) => route.fulfill({json: {flags: 0, order: new URL(route.request().url()).searchParams.get("id") === "all" ? [] : {uuid: "fixture-order", mail: "fixture@example.org", sign: "lets-encrypt", type: "eccp256", auto: 1,
-        flag: 5, time: Date.now(), next: Date.now() + 86400000 * 60, main: "{}", list: JSON.stringify([{name: "example.com", type: "dns-api", dnsAccountId: "dns-one", flag: 4, dnsStatus: "cleaned", auth: "x".repeat(43)}]), cert: "", keys: "", text: "Local acceptance fixture"}}}));
+    await page.route("**/apply/", async (route) => {
+        fixturePayload = route.request().postDataJSON();
+        calls.push({path: '/apply/', method: 'POST', body: fixturePayload});
+        submissionEntered();
+        await submissionGate;
+        await route.fulfill({status: 202, json: {flags: 0, order: 'fixture-order'}});
+    });
+    await page.route(/\/apply\/fixture-order(?:\/.*)?$/, async (route) => {
+        const path = new URL(route.request().url()).pathname;
+        const method = route.request().method();
+        const body = route.request().postDataJSON();
+        calls.push({path, method, body});
+        if (path.endsWith('/edit')) editingOrder = true;
+        else if (path.endsWith('/resume')) editingOrder = false;
+        else if (method === 'PUT') { fixturePayload = body; editingOrder = false; }
+        await route.fulfill({status: 202, json: {flags: 0, revision: 'fixture-edit-session', order: 'fixture-order'}});
+    });
+    await page.route('**/order/**', (route) => {
+        const url = new URL(route.request().url());
+        if (url.searchParams.get('op')) calls.push({path: `/order/?op=${url.searchParams.get('op')}`, method: 'GET'});
+        if (allowCompletion && !editingOrder && ++completionPolls >= 2) fixtureFlag = 5;
+        const payload = fixturePayload ?? {domains: [{name: 'example.com', type: 'dns-api', dnsAccountId: 'dns-one'}], targetIds: []};
+        const record = {
+            uuid: 'fixture-order', mail: 'fixture@example.org', sign: 'lets-encrypt', type: 'eccp256', auto: 1,
+            flag: fixtureFlag, time: Date.now(), next: Date.now() + 86400000 * 60, main: JSON.stringify(payload.subject ?? {}),
+            targetIds: payload.targetIds,
+            list: JSON.stringify(payload.domains.map((domain: any) => ({...domain, flag: fixtureFlag === 5 ? 4 : 2,
+                dnsStatus: fixtureFlag === 5 ? 'cleaned' : 'waiting_propagation', auth: 'x'.repeat(43)}))), cert: '', keys: '', text: 'Local acceptance fixture',
+            work: {status: editingOrder ? 'action_required' : fixtureFlag === 5 ? 'complete' : 'waiting', intent: editingOrder ? 'edit' : 'process',
+                detail: editingOrder ? '\u6b63\u5728\u7f16\u8f91' : fixtureFlag === 5 ? '\u8bc1\u4e66\u5df2\u7b7e\u53d1' : '\u7b49\u5f85 DNS \u8bb0\u5f55\u751f\u6548\uff0c\u5c06\u81ea\u52a8\u590d\u67e5',
+                updatedAt: Date.now(), nextRun: fixtureFlag === 5 ? 0 : Date.now() + 4000},
+        };
+        return route.fulfill({json: {flags: 0, order: url.searchParams.get('id') === 'all' ? fixturePayload ? [record] : [] : record}});
+    });
     await page.route("**/resources/**", async (route) => {
         const request = route.request(); const path = new URL(request.url()).pathname; const method = request.method();
         if (path === "/resources/dcv") {
@@ -887,6 +1041,7 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.getByText("DNS \u8d26\u6237", {exact: true}).click();
         await page.getByRole("combobox").click();
         await page.getByText("Example DNS (cloudflare)", {exact: true}).click();
+        await page.getByText('\u901a\u914d\u7b26 (*.)', {exact: true}).locator('..').getByRole('switch').click();
         await page.getByRole("button", {name: "\u4e0b\u4e00\u6b65", exact: true}).click();
         const google = page.getByRole("button", {name: /Google/});
         await google.waitFor({state: "visible"});
@@ -902,17 +1057,82 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.keyboard.press("Escape");
         await page.getByRole("button", {name: "\u4e0b\u4e00\u6b65", exact: true}).click();
         await page.getByRole("button", {name: "\u63d0\u4ea4\u7533\u8bf7", exact: true}).click();
+        await submissionStarted;
+        const overlay = page.locator('[role="status"][aria-busy="true"]').filter({hasText: '\u6b63\u5728\u63d0\u4ea4\u7533\u8bf7'});
+        await overlay.waitFor();
+        const overlayBounds = (await overlay.boundingBox())!;
+        assert.equal(overlayBounds.x, 0);
+        assert.equal(overlayBounds.y, 0);
+        assert.equal(overlayBounds.width, 1440);
+        assert.equal(overlayBounds.height, 1000);
+        assert.equal(await page.evaluate(() => !!document.elementFromPoint(120, 240)?.closest('[role="status"][aria-busy="true"]')), true);
+        await page.screenshot({path: directory + 'submission-overlay-background.png', fullPage: true});
+        releaseSubmission();
         await page.waitForURL("**/#/order/fixture-order");
         const submission = calls.find((call) => call.path === "/apply/")!.body;
         assert.equal(submission.globals.ca, "lets-encrypt");
         assert.equal(submission.domains[0].dnsAccountId, "dns-one");
         assert.deepEqual(submission.targetIds, ["hook-one", "nginx-one"]);
+        await page.getByText('\u7b49\u5f85 DNS \u751f\u6548', {exact: true}).first().waitFor();
+        assert.equal(await page.getByRole('button', {name: '\u7acb\u5373\u5904\u7406', exact: true}).count(), 0);
+        assert.equal(await page.getByRole('button', {name: '\u9a8c\u8bc1\u5168\u90e8', exact: true}).count(), 0);
+        assert.equal(await page.getByText('dns-api', {exact: true}).count(), 0);
+        const verifyBounds = (await page.locator('[class*="verifyCard"]').boundingBox())!;
+        const deploymentBounds = (await page.getByRole('heading', {name: '\u90e8\u7f72\u72b6\u6001', exact: true}).locator('xpath=../..').boundingBox())!;
+        assert.ok(deploymentBounds.y - verifyBounds.y - verifyBounds.height >= 20);
+        await page.screenshot({path: directory + 'automatic-dns-background.png', fullPage: true});
+        await page.setViewportSize({width: 390, height: 844});
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+        await page.screenshot({path: directory + 'automatic-dns-background-mobile.png', fullPage: true});
+        await page.setViewportSize({width: 1440, height: 1000});
+        await page.getByRole('button', {name: '\u4fee\u6539\u7533\u8bf7', exact: true}).click();
+        await page.waitForURL('**/#/apply?edit=fixture-order');
+        await page.waitForFunction(() => {
+            const inputs = document.querySelectorAll<HTMLInputElement>('input[placeholder="example.com"]');
+            return inputs.length === 1 && inputs[0].value === 'example.com';
+        });
+        await page.getByRole('button', {name: '\u53d6\u6d88\u7f16\u8f91', exact: true}).click();
+        await page.waitForURL('**/#/order/fixture-order');
+        assert.equal(calls.some((call) => call.path.includes('op=modify')), false);
+        await page.getByRole('button', {name: '\u4fee\u6539\u7533\u8bf7', exact: true}).click();
+        await page.waitForURL('**/#/apply?edit=fixture-order');
+        await page.waitForFunction(() => {
+            const inputs = document.querySelectorAll<HTMLInputElement>('input[placeholder="example.com"]');
+            return inputs.length === 1 && inputs[0].value === 'example.com';
+        });
+        await page.getByPlaceholder('example.com', {exact: true}).fill('updated.example.com');
+        await page.getByRole('button', {name: '\u4e0b\u4e00\u6b65', exact: true}).click();
+        await page.getByRole('button', {name: '\u4e0b\u4e00\u6b65', exact: true}).click();
+        await page.getByRole('button', {name: '\u4fdd\u5b58\u66f4\u6539', exact: true}).click();
+        await page.waitForURL('**/#/order/fixture-order');
+        const editedPayload = calls.find((call) => call.path === '/apply/fixture-order' && call.method === 'PUT')!.body;
+        assert.equal(editedPayload.domains[0].name, 'updated.example.com');
+        assert.equal(editedPayload.editRevision, 'fixture-edit-session');
+        assert.equal(calls.filter((call) => call.path === '/apply/').length, 1);
+        await navigate('/certs');
+        await page.getByText('updated.example.com', {exact: true}).first().waitFor();
+        completionPolls = 0;
+        const refreshedList = page.waitForResponse((response) => {
+            const url = new URL(response.url());
+            return url.pathname === '/order/' && url.searchParams.get('id') === 'all' && completionPolls >= 2;
+        });
+        allowCompletion = true;
+        await refreshedList;
+        await page.getByText('\u5df2\u7b7e\u53d1', {exact: true}).first().waitFor();
+        await page.goto(`${base}/#/order/fixture-order`);
+        await page.getByText('\u5168\u90e8\u57df\u540d\u5df2\u9a8c\u8bc1', {exact: true}).waitFor();
         const failed = page.getByRole("row").filter({hasText: "Public Nginx"});
         await failed.getByRole("button", {name: "\u91cd\u8bd5\u6b64\u76ee\u6807"}).click();
         await failed.getByText("\u5df2\u90e8\u7f72", {exact: true}).waitFor({state: "visible"});
         assert.equal(calls.filter((call) => call.path.endsWith("/retry")).length, 1);
         assert.equal(calls.find((call) => call.path.endsWith("/retry"))!.path.includes("nginx-one"), true);
         await page.screenshot({path: directory + "desktop-order.png", fullPage: true});
+        deployments = [];
+        fixturePayload = {...fixturePayload, targetIds: []};
+        await page.reload();
+        await page.getByText('\u672a\u8bbe\u7f6e\u81ea\u52a8\u90e8\u7f72\uff0c\u7b7e\u53d1\u540e\u53ef\u4e0b\u8f7d\u8bc1\u4e66\u3002', {exact: true}).waitFor();
+        assert.equal(await page.getByRole('table').count(), 0);
+        await page.screenshot({path: directory + 'automatic-dns-empty-deployment.png', fullPage: true});
         await page.goto(`${base}/#/domains`);
         await page.getByRole("button", {name: /\u65b0\s*\u5efa/}).click();
         await page.getByLabel("\u8d26\u6237\u540d", {exact: true}).fill("Local acceptance DNS");
@@ -1240,4 +1460,123 @@ test("DCV hosting is unavailable until its domain, zone and supported authentica
     assert.equal((await dcvCapability(async (name) => settings[name] ?? null)).available, true);
     settings.DCV_ZONES = "invalid";
     assert.equal((await dcvCapability(async (name) => settings[name] ?? null)).available, false);
+});
+
+test("background workflow continues automatic DNS, pauses manual input and preserves superseding cancellation", async () => {
+    _resetDaoForTests(); invalidateAll();
+    const database = memoryD1();
+    const dao = new D1Dao(database as any);
+    const env: any = {DB_CF: database, DB_SOURCE: "d1"};
+    const {queueOrder, runOrderStep, readOrderWork, CertificateWorkflow} = await import("../src/order-workflow");
+    await dao.insertUser({mail: "flow@example.com", flag: "1", is_admin: 0, quota: -1});
+    const insert = async (uuid: string, type = "dns-api") => dao.insertApply({uuid, mail: "flow@example.com", sign: null, type: null,
+        auto: 1, flag: 1, time: 1, next: 100000, main: "{}", data: "{}", keys: "", cert: "",
+        list: JSON.stringify([{name: "example.com", type, flag: 0}])});
+    try {
+        await insert("automatic");
+        await queueOrder(env, "automatic");
+        const waiting = await runOrderStep(env, "automatic", async () => {
+            await dao.updateApply("automatic", {flag: 2, list: JSON.stringify([{name: "example.com", type: "dns-api", flag: 2, dnsStatus: "waiting_propagation"}])});
+            return [];
+        });
+        assert.equal(waiting!.status, "waiting");
+        assert.ok(waiting!.nextRun > Date.now());
+        await runOrderStep(env, "automatic", async () => { await dao.updateApply("automatic", {flag: 5}); return []; });
+        assert.equal((await readOrderWork(dao, "automatic"))!.status, "complete");
+        await insert("manual", "dns-self");
+        await queueOrder(env, "manual");
+        const manual = await runOrderStep(env, "manual", async () => {
+            await dao.updateApply("manual", {flag: 2, list: JSON.stringify([{name: "example.com", type: "dns-self", flag: 2}])}); return [];
+        });
+        assert.equal(manual!.status, "action_required");
+        assert.equal(manual!.nextRun, 0);
+        await insert("superseded");
+        await queueOrder(env, "superseded");
+        const superseded = await runOrderStep(env, "superseded", async () => {
+            await queueOrder(env, "superseded", "cancel");
+            await dao.updateApply("superseded", {flag: 2}); return [];
+        });
+        assert.equal(superseded!.intent, "cancel");
+        assert.equal(superseded!.status, "queued");
+        await runOrderStep(env, "superseded", async () => { throw new Error("Cancellation must win"); });
+        assert.equal((await readOrderWork(dao, "superseded"))!.status, "cancelled");
+        assert.ok(await dao.getApply("superseded"));
+        await insert('early-cancel');
+        await queueOrder(env, 'early-cancel');
+        const persistent = await (await import('../src/db')).ensureDao(env);
+        const originalClaim = persistent.claimConfLease!.bind(persistent);
+        let cancelledBeforeStart = false;
+        let advances = 0;
+        persistent.claimConfLease = async (name, value, expiresAt, now) => {
+            const claimed = await originalClaim(name, value, expiresAt, now);
+            if (claimed && name === 'ORDER_WORK_LEASE:early-cancel' && !cancelledBeforeStart) {
+                cancelledBeforeStart = true;
+                await queueOrder(env, 'early-cancel', 'cancel');
+            }
+            return claimed;
+        };
+        try {
+            const cancelled = await runOrderStep(env, 'early-cancel', async () => { advances++; return []; });
+            assert.equal(cancelled!.intent, 'cancel');
+            assert.equal(advances, 0);
+        } finally { persistent.claimConfLease = originalClaim; }
+        await insert("retryable");
+        await queueOrder(env, "retryable");
+        const retry = await runOrderStep(env, "retryable", async () => { throw new Error("connection timed out"); });
+        assert.equal(retry!.status, "waiting");
+        assert.equal((await dao.getApply("retryable"))!.flag, 1);
+        const saved = new Map<string, any>();
+        let alarm = 0;
+        const state: any = {storage: {put: async (key: string, value: any) => saved.set(key, value),
+            get: async (key: string) => saved.get(key), setAlarm: async (time: number) => { alarm = time; }, deleteAlarm: async () => { alarm = 0; }}};
+        const actor = new CertificateWorkflow(state, env);
+        const accepted = await actor.fetch(new Request("https://order.internal/start", {method: "POST", body: JSON.stringify({uuid: "automatic"})}));
+        assert.equal(accepted.status, 202);
+        assert.ok(alarm > 0);
+        await actor.alarm();
+        assert.equal(alarm, 0);
+        await insert('renewal');
+        env.AUTOMATION_KEY = Buffer.alloc(32, 7).toString('base64');
+        const originalExpiry = Date.now() + 86400000;
+        await dao.updateApply('renewal', {flag: 5, cert: 'original-certificate', keys: 'original-private-key', next: originalExpiry});
+        await queueOrder(env, 'renewal', 'retry');
+        assert.equal((await dao.getConf('ORDER_PREVIOUS:renewal'))!.includes('original-private-key'), false);
+        await runOrderStep(env, 'renewal', async () => {
+            await dao.updateApply('renewal', {keys: 'unfinished-replacement-key', next: Date.now() + 7 * 86400000});
+            throw new Error('Unsupported fixture failure');
+        });
+        const preserved = (await dao.getApply('renewal'))!;
+        assert.equal(preserved.flag, 5);
+        assert.equal(preserved.cert, 'original-certificate');
+        assert.equal(preserved.keys, 'original-private-key');
+        assert.equal(preserved.next, originalExpiry);
+        await insert('timeout');
+        const timed = await queueOrder(env, 'timeout');
+        await dao.upsertConf('ORDER_WORK:timeout', JSON.stringify({...timed, startedAt: Date.now() - 3 * 3600000}), Date.now());
+        const paused = await runOrderStep(env, 'timeout', async () => { throw new Error('Timed out work must pause before external requests'); });
+        assert.equal(paused!.reason, 'timeout');
+        assert.equal(paused!.nextRun, 0);
+        await new CertificateWorkflow({storage: {...state.storage, get: async () => { throw new Error('Temporary storage error'); }}} as any, env).alarm();
+        assert.ok(alarm > Date.now());
+        await insert('cleanup');
+        await dao.updateApply('cleanup', {flag: 5, cert: 'issued-certificate', keys: 'issued-private-key',
+            list: JSON.stringify([{name: 'example.com', type: 'dns-api', dnsAccountId: 'unavailable-account', flag: 4,
+                dnsStatus: 'cleanup_pending', dnsHandle: {id: 'owned-record'}}])});
+        await queueOrder(env, 'cleanup');
+        const cleaning = await runOrderStep(env, 'cleanup', async () => { throw new Error('Cleanup must not reissue the certificate'); });
+        assert.equal(cleaning!.status, 'waiting');
+        assert.ok(cleaning!.nextRun > Date.now());
+        assert.equal((await dao.getApply('cleanup'))!.flag, 5);
+        await dao.updateApply('cleanup', {list: JSON.stringify([{name: 'example.com', type: 'dns-api', flag: 4, dnsStatus: 'cleaned'}])});
+        const clean = await runOrderStep(env, 'cleanup', async () => []);
+        assert.equal(clean!.status, 'complete');
+        assert.equal(clean!.nextRun, 0);
+        await dao.updateApply('cleanup', {list: JSON.stringify([{name: 'example.com', type: 'dns-api', flag: 4, dnsStatus: 'cleanup_pending'}])});
+        const recovered: string[] = [];
+        env.ORDER_WORKFLOW = {idFromName: (name: string) => name,
+            get: (name: string) => ({fetch: async () => { recovered.push(name); return Response.json({accepted: true}); }})};
+        await (await import('../src/order-workflow')).resumePendingOrders(env);
+        assert.equal(recovered.includes('cleanup'), true);
+        assert.equal((await dao.getApply('cleanup'))!.flag, 5);
+    } finally { _resetDaoForTests(); invalidateAll(); database.close(); }
 });

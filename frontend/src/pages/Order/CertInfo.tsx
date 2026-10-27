@@ -68,7 +68,7 @@ export default function CertInfo({ order }: CertInfoProps) {
                     : status === 'verifying'
                       ? 'lemon'
                       : 'info';
-            const text =
+            const text = order.work?.status === 'cancelled' && !order.cert ? '已取消' :
               status === 'signed'
                 ? '已签发'
                 : status === 'expired'

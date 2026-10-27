@@ -8,6 +8,10 @@
   ],
   "alias": {"cpu-features": "./src/deploy/cpu-features.cjs"},
   "define": {"__dirname": "\"/\""},
+  "durable_objects": {
+    "bindings": [{"name": "ORDER_WORKFLOW", "class_name": "CertificateWorkflow"}]
+  },
+  "migrations": [{"tag": "v1-certificate-workflow", "new_sqlite_classes": ["CertificateWorkflow"]}],
   "vars": {
     "DB_SOURCE": "d1",
     "MAIL_KEYS": "",

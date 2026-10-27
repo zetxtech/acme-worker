@@ -100,21 +100,7 @@ export function extractAcmeError(e: any): string {
 
 // 整体处理进程 ====================================================================================
 export async function Processing(env: Bindings) {
-    await query.retryDnsCleanup(env).catch(() => 0);
-    let order_list: any = await saves.selectDB(env.DB_CF, "Apply", {flag: {value: 5, op: "!="}});
-    let result: any[] = []
-    for (const id in order_list) { // 获取信息 ==================================================================
-        let order_info = order_list[id]; // 获取当前订单详细情况
-        let order_mail = order_info['mail']; // 当前订单用户邮箱
-        let order_user: any = (await saves.selectDB( // 查询申请者信息
-            env.DB_CF, "Users", {mail: {value: order_mail}}))[0]; // 按不同阶段分配程序处理 ========================
-        if (order_info['flag'] == 0) result.push(await newApply(env, order_user, order_info));// 执行创建订单操作
-        if (order_info['flag'] == 1) result.push(await setApply(env, order_user, order_info));// 自动执行域名代理
-        if (order_info['flag'] == 2) result.push(await opDomain(env, order_user, order_info, []));// 自动验证域名
-        if (order_info['flag'] == 3) result.push(await dnsAuthy(env, order_user, order_info));// 自动执行域名验证
-        if (order_info['flag'] == 4) result.push(await getCerts(env, order_user, order_info));// 自动执行获取证书
-    } // ========================================================================================================
-    return result;
+    return (await import("./order-workflow")).resumePendingOrders(env);
 }
 
 // 单订单一键推进 ==================================================================================
@@ -123,7 +109,7 @@ export async function Processing(env: Bindings) {
 // - flag=5  证书签发完成
 // - flag=-1 失败
 // - 或中间某步 flag 未发生变化（避免死循环）
-export async function processOne(env: Bindings, order_uuid: string) {
+export async function processOne(env: Bindings, order_uuid: string, options: {oneStep?: boolean; throwOnError?: boolean} = {}) {
     let result: any[] = [];
     // 自愈检查：订单已创建（data 存在）但 list 中某些域名 auth 缺失，则强制回到 flag=1 重跑 setApply
     {
@@ -164,6 +150,7 @@ export async function processOne(env: Bindings, order_uuid: string) {
             else if (flag === 4) result.push(await getCerts(env, order_user, order_info));
             else break; // 其它未知状态，停止推进
         } catch (e) {
+            if (options.throwOnError) throw e;
             const msg = extractAcmeError(e);
             console.error("processOne error at flag=" + flag + ":", e);
             // 将错误信息持久化到订单，供前端展示
@@ -180,7 +167,7 @@ export async function processOne(env: Bindings, order_uuid: string) {
         // 若本轮处理后 flag 未推进，防止死循环
         let next_info: any = (await saves.selectDB(
             env.DB_CF, "Apply", {uuid: {value: order_uuid}}))[0];
-        if (flag === 1 || flag === 2 || flag === 3) break;
+        if (options.oneStep || flag === 1 || flag === 2 || flag === 3) break;
         if (!next_info || Number(next_info['flag']) === flag) break;
     }
     return result;
@@ -338,6 +325,11 @@ export async function opDomain(env: Bindings, order_user: any, order_info: any, 
                 try { await presentDomainDns(env, order_user.mail, order_info.uuid, domain_item); }
                 catch { domain_item.dnsStatus = "provider_failed"; }
             }
+            if (domain_item.type === 'dns-api' && !domain_item.dnsHandle) {
+                domain_flag = 2;
+                domain_save.push(domain_item);
+                continue;
+            }
             try {
                 const target = domain_item.type === "dns-auto" ? domain_item.auto : `_acme-challenge.${domain_item.name.replace(/^\*\./, "")}`;
                 const cnameReady = domain_item.type !== "dns-auto" || (await query.queryDNS(
@@ -347,10 +339,10 @@ export async function opDomain(env: Bindings, order_user: any, order_info: any, 
                     domain_item.flag = 3;
                     domain_item.dnsStatus = "propagated";
                 } else {
-                    domain_item.dnsStatus = "waiting_propagation";
+                    domain_item.dnsStatus = !cnameReady ? "waiting_delegation" : "waiting_propagation";
                     domain_flag = 2;
                 }
-            } catch { domain_flag = 2; }
+            } catch { domain_item.dnsStatus = 'resolver_unavailable'; domain_flag = 2; }
         } else if (domain_item.flag < 3) {
             domain_flag = 2;
         }
@@ -442,6 +434,7 @@ export async function dnsAuthy(env: Bindings, order_user: any, order_info: any, 
             if (author_data.data['status'] == "invalid") { // 已有验证失败
                 domain_item.flag = -1;
                 status_flag = -1;
+                domain_fail.push(`${domain_item.name}: ${author_data.data.error?.detail || '签发机构拒绝了域名验证，请检查解析和 CAA 设置'}`);
             }
             if (author_data.data['status'] == 'pending') {
                 try {
@@ -455,6 +448,7 @@ export async function dnsAuthy(env: Bindings, order_user: any, order_info: any, 
                     console.log('Domain Remote Verify Errors:', error);
                     domain_item.flag = -1;
                     status_flag = -1;
+                    domain_fail.push(`${domain_item.name}: ${extractAcmeError(error)}`);
                 }
             }
             if (author_data.data['status'] == 'valid') {

@@ -21,14 +21,14 @@ export default function DomainVerify({
   onVerifySingle,
 }: DomainVerifyProps) {
   const list = order.list || [];
-  const pendingCount = list.filter((d) => d.flag !== undefined && d.flag < 3).length;
+  const pendingCount = list.filter((d) => Number(d.flag ?? 0) < 4).length;
 
   return (
     <div className={styles.verifyCard}>
       <SectionHeader
         icon={<Globe size={16} />}
         title={`域名验证 (${list.length} 个)`}
-        subtitle={pendingCount > 0 ? `${pendingCount} 个待处理` : '全部已处理'}
+        subtitle={pendingCount > 0 ? `${list.length - pendingCount} / ${list.length} 个已验证` : '全部域名已验证'}
       />
 
       <div className={styles.domainPanels}>
@@ -53,13 +53,20 @@ function DomainPanel({
 }) {
   const [expanded, setExpanded] = useState(false);
   const flag = domain.flag ?? 0;
-  const pulseStatus = FLAG_PULSE[flag] || 'pending';
-  const isVerifiable = flag === 2;
+  const automatic = domain.type === 'dns-api';
+  const pulseStatus = flag >= 4 ? 'success' : flag < 0 ? 'failed' : automatic || flag === 3 ? 'verifying' : 'pending';
+  const isVerifiable = flag === 2 && (!automatic && domain.type !== 'dns-auto' || domain.dnsStatus === 'waiting_delegation');
 
   const recordName = `_acme-challenge.${domain.name.replace(/^\*\./, '')}`;
   const recordType = domain.type === 'dns-auto' ? 'CNAME' : 'TXT';
   const dnsStatus: Record<string, string> = {preparing_records: '等待准备 DNS 记录', access_denied: 'DNS 账户授权已失效，请联系账户所有者', provider_failed: '写入失败，请检查 DNS 账户后重试', waiting_propagation: '等待 DNS 生效',
-    propagated: 'DNS 已生效，等待验证', cleanup_pending: '验证已完成，等待清理记录', cleaned: '验证记录已清理'};
+    waiting_delegation: '等待首次添加 CNAME 委派记录',
+    resolver_unavailable: 'DNS 查询暂不可用',
+    propagated: '签发机构正在验证', cleanup_pending: '已验证，正在清理记录', cleaned: '已验证'};
+  const status = flag >= 4 ? '已验证' : flag < 0 ? '验证失败' : flag === 3 ? '签发机构验证中'
+    : automatic ? dnsStatus[domain.dnsStatus ?? ''] ?? '后台准备中'
+      : domain.type === 'dns-auto' ? dnsStatus[domain.dnsStatus ?? ''] ?? '正在配置托管记录'
+        : flag === 2 ? '等待配置验证记录' : '正在准备验证信息';
   const recordValue =
     domain.type === 'dns-auto' ? domain.auto || '-' : domain.auth || '-';
 
@@ -80,7 +87,7 @@ function DomainPanel({
           </Pill>
           <Pill
             variant={
-              flag === 5
+              flag >= 4
                 ? 'ok'
                 : flag < 0
                   ? 'err'
@@ -90,7 +97,7 @@ function DomainPanel({
             }
             size="xs"
           >
-            {FLAG_MAP[flag] || '等待中'}
+            {status}
           </Pill>
         </div>
         <motion.div
@@ -116,7 +123,7 @@ function DomainPanel({
                   : domain.type === 'web-self' ? '请将验证内容保存到以下地址：' : '请在您的 DNS 提供商中添加以下记录以完成验证：'}
               </div>
 
-              <div className={styles.dnsTable}>
+              {!automatic && <div className={styles.dnsTable}>
                 <DnsRow label="记录类型" value={domain.type === 'web-self' ? 'HTTP-01' : recordType} />
                 <DnsRow label={domain.type === 'web-self' ? '验证地址' : '记录名称'} value={domain.type === 'web-self'
                   ? `http://${domain.name}/.well-known/acme-challenge/${domain.token ?? ''}` : recordName} />
@@ -127,18 +134,18 @@ function DomainPanel({
                   value={`nslookup -q=${recordType} ${recordName}`}
                   mono
                 />
-              </div>
+              </div>}
 
-              <div className={styles.domainActions}>
+              {isVerifiable && <div className={styles.domainActions}>
                 <Button
                   type="primary"
                   icon={<PlayCircle size={14} />}
                   onClick={onVerify}
                   disabled={!isVerifiable}
                 >
-                  {isVerifiable ? '触发验证' : '耐心等待...'}
+                  已配置记录，检查验证
                 </Button>
-              </div>
+              </div>}
             </div>
           </motion.div>
         )}

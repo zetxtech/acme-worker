@@ -53,6 +53,15 @@ export interface ApplyPayload {
 
 /** 订单数据（后端存储结构） */
 export interface OrderRaw {
+  work?: {
+    status: 'queued' | 'running' | 'waiting' | 'action_required' | 'complete' | 'failed' | 'cancelled';
+    intent: string;
+    detail: string;
+    updatedAt: number;
+    nextRun: number;
+    reason?: 'timeout';
+  };
+  targetIds?: string[];
   uuid: string;
   mail: string;
   sign: string;

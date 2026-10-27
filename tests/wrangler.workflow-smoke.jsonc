@@ -1,0 +1,13 @@
+{
+  "name": "acme-local-workflow-smoke",
+  "main": "workflow-runtime-worker.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "alias": {"cpu-features": "../src/deploy/cpu-features.cjs"},
+  "define": {"__dirname": "\"/\""},
+  "vars": {"DB_SOURCE": "d1"},
+  "workers_dev": false,
+  "d1_databases": [{"binding": "DB_CF", "database_name": "workflow-smoke-local", "database_id": "11111111-1111-1111-1111-111111111111"}],
+  "durable_objects": {"bindings": [{"name": "ORDER_WORKFLOW", "class_name": "CertificateWorkflowProbe"}]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["CertificateWorkflowProbe"]}]
+}

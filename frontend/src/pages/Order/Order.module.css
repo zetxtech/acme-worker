@@ -2,6 +2,26 @@
  * Order 订单详情页样式
  * ============================================================ */
 
+.orderPage {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.orderPage > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.orderPage .actionsBar {
+  position: static;
+}
+
+.orderPage .domainPanelLeft {
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .greet {
   display: flex;
   align-items: center;

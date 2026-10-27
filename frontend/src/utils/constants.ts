@@ -93,6 +93,7 @@ export const FLAG_PULSE: Record<
 
 // 验证方式
 export const AUTH_MAP: Record<string, string> = {
+  'dns-api': 'DNS 账户自动验证',
   'dns-self': 'TXT 手动验证',
   'web-self': 'WEB 手动验证',
   'dns-auto': 'DCV 托管',

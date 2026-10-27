@@ -13,14 +13,23 @@ import {ensureDao} from "../db";
 import {sha256Hex} from "../edge/tencent";
 import type {Dao} from "../db/dao";
 
-export async function registeredClient(dao: Pick<Dao, "getConf" | "upsertConf">,
+export async function registeredClient(dao: Pick<Dao, "getConf" | "upsertConf"> & Partial<Pick<Dao, 'claimConfLease' | 'releaseConfLease'>>,
     options: any, mail: string, create: (options: any) => any = (options) => new acme.Client(options)) {
     // Normalize the key so the account identity never changes because of surrounding whitespace:
     // a different identity would register a second account and consume the one-time EAB again.
     const accountKey = typeof options.accountKey === "string" ? options.accountKey.trim() : "";
     if (!accountKey) throw new Error("ACME account private key is required");
     const identity = `ACME_ACCOUNT:${await sha256Hex(options.directoryUrl + "\n" + accountKey)}`;
-    const accountUrl = await dao.getConf(identity);
+    let accountUrl = await dao.getConf(identity);
+    const lease = `ACME_ACCOUNT_LEASE:${identity}`;
+    const token = crypto.randomUUID();
+    let locked = false;
+    if (!accountUrl && dao.claimConfLease && dao.releaseConfLease) {
+        locked = await dao.claimConfLease(lease, token, Date.now() + 300000, Date.now());
+        if (!locked) throw new Error('ACME account initialization is busy; retry later');
+        accountUrl = await dao.getConf(identity);
+    }
+    try {
     // The account key is the account identity: once registered, signed requests never need the EAB again.
     // Dropping it also avoids sending a spent/expired secret, which CAs would reject.
     const client = create({...options, accountKey, externalAccountBinding: accountUrl ? undefined : options.externalAccountBinding,
@@ -30,13 +39,16 @@ export async function registeredClient(dao: Pick<Dao, "getConf" | "upsertConf">,
             await client.createAccount({termsOfServiceAgreed: true, contact: ["mailto:" + mail]});
         } catch (error: any) {
             const detail = String(error?.message ?? error);
-            throw new Error("ACME account registration failed (" + detail + "). External Account Binding is consumed by the "
-                + "first registration only, and Google invalidates an unused EAB secret after 7 days; generate a new EAB "
-                + "secret for this CA and keep the account key unchanged.");
+            const problem = `${detail} ${JSON.stringify(error?.response?.data ?? {})}`;
+            if (!options.externalAccountBinding || !/eab|external.?account|hmac|key.?identifier|invalid.*kid/i.test(problem)) throw error;
+            const wrapped: any = new Error(`ACME account registration failed (${detail}). Verify the initial EAB credentials and keep the account key unchanged.`);
+            wrapped.cause = error;
+            throw wrapped;
         }
         await dao.upsertConf(identity, client.getAccountUrl(), Date.now());
     }
     return client;
+    } finally { if (locked) await dao.releaseConfLease!(lease, token); }
 }
 
 /**
@@ -49,10 +61,19 @@ export async function resolveAccountKey(env: Bindings, sign: string, configured:
     if (!["google-trust", "zeroca-trust", "sslcom-trust"].includes(sign)) return "";
     const stored = (await readConf(env as any, `ACME_KEY:${sign}`))?.trim();
     if (stored) return stored;
+    const dao = await ensureDao(env);
+    const lease = `ACME_KEY_LEASE:${sign}`;
+    const token = crypto.randomUUID();
+    if (!dao.claimConfLease || !dao.releaseConfLease) throw new Error('ACME account initialization requires atomic storage');
+    if (!await dao.claimConfLease(lease, token, Date.now() + 30000, Date.now())) throw new Error('ACME account initialization is busy; retry later');
+    try {
+    const existing = (await dao.getConf(`ACME_KEY:${sign}`))?.trim();
+    if (existing) return existing;
     const generated = (await acme.crypto.createPrivateEcdsaKey("P-256")) as any;
     const pem = generated.toString().trim();
     await writeConf(env as any, `ACME_KEY:${sign}`, pem);
     return pem;
+    } finally { await dao.releaseConfLease(lease, token); }
 }
 
 const ACME_URL: Record<string, any> = {

@@ -32,6 +32,7 @@ import {assertCaAvailable, assertDcvAvailable, caCapabilities, dcvCapability, no
 import {readConf} from "../db/conf";
 import {validateSelections} from "../resources";
 import {deploymentStates, pushSelectedOrder} from "../deployment";
+import {queueOrder} from "../order-workflow";
 
 /** 解析鉴权头 */
 function parseAuth(c: Context): { mail: string; token: string } | null {
@@ -154,7 +155,8 @@ async function handleCreateOrder(c: Context<{ Bindings: Bindings }>): Promise<Re
     } as ApplyRow);
 
     await dao.upsertConf(`ORDER_DEPLOYMENT:${uuid}`, JSON.stringify(selectedTargets), now);
-    return c.json({code: "OK", message: "已创建", uuid}, 200);
+    await queueOrder(c.env, uuid);
+    return c.json({code: "OK", message: "已受理，后台处理中", uuid}, 202);
 }
 
 function randomUuid(lens: number): string {

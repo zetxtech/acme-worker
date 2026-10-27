@@ -1,5 +1,12 @@
 # Worker Certificate Workflow Implementation Plan
 
+## Current Work: Background Certificate Lifecycle (2026-10-27)
+- Implemented: order acceptance independent of CA/DNS latency; durable server-side continuation and retries; request identity preserved during edits; detail/list synchronization without keeping the tab open; post-issuance cleanup continuation.
+- Final acceptance: 40/40 lifecycle tests with zero skipped, including actual workerd alarms and SSH/SFTP and browser scenarios; production frontend build and complete Worker binding/bundle checks passed. Publisher retry/binding tests passed 6/6.
+- Final production release b60ce2aa-9568-486b-bfc1-f206f16724d8 is deployed and verified. One legacy request remains in backend DNS propagation waiting, not falsely marked issued. All local probes stopped and the temporary network probe is absent. Source delivery is included in this background-workflow change set; pushing is blocked by the intended remote returning Repository not found.
+- Regression gates: submission returns 202 without external calls; modify never deletes; owner-only in-place update; automatic DNS needs no manual process/verify buttons; manual DNS/HTTP retain actionable instructions; UI polls without starting work; portal overlays cover the entire layout; sections retain spacing and empty deployments stay compact.
+- Preserve D1, existing credentials, precise DNS cleanup, service bindings, authorization, and Worker-only/free-plan constraints. Do not claim background completion from a pending request or a browser polling loop.
+
 ## Status And Handoff
 - Latest release: Worker-native lego v5.5.2 expansion deployed on 2026-10-22, with 31 private execution shards bound to the acme main Worker (version 97c95ead-32e9-46e7-bdbf-1db24ec17727). Source catalog: 223; compiled: 212; explicitly incompatible: 11. Real account/provider issuance remains subject to account verification, not implied by successful build/deployment. The earlier phase reports below describe historical local acceptance.
 - Phase 1: capability endpoint, both creation gates, account URL reuse and UI implemented. Focused and actual Hono creation-route tests plus browser checks passed. Real CA account/product issuance is not claimed.

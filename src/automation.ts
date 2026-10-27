@@ -163,7 +163,7 @@ async function jobRenew(env: Bindings): Promise<string> {
         // 旧证书保留到新证书签发成功为止，避免续期失败导致服务中断。
         await saves.updateDB(env.DB_CF!, "Apply", {flag: 0}, {uuid: row.uuid});
         try {
-            await certs.processOne(env, row.uuid);
+            await (await import("./order-workflow")).queueOrder(env, row.uuid, "retry");
             renewed += 1;
         } catch (e: any) {
             failures.push(`${row.uuid}: ${String(e?.message ?? e)}`);

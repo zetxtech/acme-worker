@@ -214,4 +214,10 @@ export class D1Dao implements Dao {
     async deleteConf(name: string): Promise<void> {
         await this.db.prepare("DELETE FROM Confs WHERE name = ?").bind(name).run();
     }
+
+    async updateConfIfUnchanged(name: string, previous: string, next: string, time: number): Promise<boolean> {
+        const result = await this.db.prepare('UPDATE Confs SET data = ?, time = ? WHERE name = ? AND data = ?')
+            .bind(next, time, name, previous).run();
+        return Number(result.meta?.changes ?? 0) > 0;
+    }
 }

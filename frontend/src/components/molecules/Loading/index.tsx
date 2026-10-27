@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import Kaomoji from '../Kaomoji';
 import styles from './Loading.module.css';
 
@@ -24,7 +25,7 @@ export default function Loading({
 }: LoadingProps) {
   const kaomojiSize = size === 'sm' ? 20 : size === 'lg' ? 36 : 28;
 
-  return (
+  const content = (
     <div
       role="status"
       aria-live="polite"
@@ -45,4 +46,5 @@ export default function Loading({
       </div>
     </div>
   );
+  return overlay && typeof document !== 'undefined' ? createPortal(content, document.body) : content;
 }

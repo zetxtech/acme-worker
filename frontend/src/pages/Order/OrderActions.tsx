@@ -1,4 +1,5 @@
 import { App as AntdApp, Button } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import {
   Archive,
   CloudUpload,
@@ -41,31 +42,22 @@ export default function OrderActions({
   onAction,
 }: OrderActionsProps) {
   const { message } = AntdApp.useApp();
+  const navigate = useNavigate();
   const isPending = order.flag >= 0 && order.flag < 5;
-  const isVerifiable = order.flag === 2;
+  const isVerifiable = order.flag === 2 && order.list.some((domain) =>
+    ['dns-self', 'web-self'].includes(domain.type) && Number(domain.flag ?? 0) < 3 || domain.dnsStatus === 'waiting_delegation');
   const isSigned = order.flag === 5;
   const hasCert = !!order.cert;
   const hasKey = !!order.keys;
 
   return (
     <div className={styles.actionsBar}>
+      {isSigned && order.work?.intent === 'cleanup' && order.work.status === 'action_required'
+        && <Button icon={<RotateCcw size={16}/>} loading={operating} onClick={() => onAction('process')}>重试清理验证记录</Button>}
       {isPending && (
         <>
-          <Button
-            type="primary"
-            size="large"
-            icon={<Zap size={16} />}
-            loading={operating}
-            onClick={() =>
-              onAction('process', undefined, {
-                confirm:
-                  '确认立即处理此订单？需要一些时间',
-              })
-            }
-          >
-            立即处理
-          </Button>
-          <Button
+          {order.work?.reason === 'timeout' && <Button icon={<RotateCcw size={16}/>} loading={operating} onClick={() => onAction('process')}>重新检查</Button>}
+          {isVerifiable && <Button
             size="large"
             icon={<PlayCircle size={16} />}
             disabled={!isVerifiable || operating}
@@ -76,35 +68,17 @@ export default function OrderActions({
               })
             }
           >
-            {isVerifiable ? '验证全部' : '耐心等待'}
-          </Button>
-          <Button
-            size="large"
-            icon={<RotateCcw size={16} />}
-            disabled={!isVerifiable || operating}
-            loading={operating}
-            onClick={() =>
-              onAction('reload', undefined, {
-                confirm: '确认重新生成验证信息？原有的 DNS 记录将失效',
-              })
-            }
-          >
-            重新生成
-          </Button>
-          <Button
+            已配置记录，检查验证
+          </Button>}
+          {order.flag < 4 && <Button
             size="large"
             icon={<Pencil size={16} />}
-            disabled={!isVerifiable || operating}
+            disabled={operating}
             loading={operating}
-            onClick={() =>
-              onAction('modify', undefined, {
-                confirm: '确认修改申请？当前订单将被删除',
-                danger: true,
-              })
-            }
+            onClick={() => navigate(`/apply?edit=${encodeURIComponent(order.uuid)}`)}
           >
             修改申请
-          </Button>
+          </Button>}
           <Button
             danger
             size="large"
@@ -113,7 +87,7 @@ export default function OrderActions({
             disabled={operating}
             onClick={() =>
               onAction('cancel', undefined, {
-                confirm: '确认撤销此订单？此操作不可恢复',
+                confirm: '停止后续处理？申请记录和已有证书会保留。',
                 danger: true,
               })
             }
@@ -122,6 +96,11 @@ export default function OrderActions({
           </Button>
         </>
       )}
+
+      {order.flag < 0 && order.work?.status !== 'cancelled' && <>
+        <Button type="primary" loading={operating} icon={<RotateCcw size={16}/>} onClick={() => onAction('process')}>重试申请</Button>
+        <Button icon={<Pencil size={16}/>} onClick={() => navigate(`/apply?edit=${encodeURIComponent(order.uuid)}`)}>编辑并重新提交</Button>
+      </>}
 
       {isSigned && (
         <>

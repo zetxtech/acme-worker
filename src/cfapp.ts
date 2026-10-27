@@ -1,6 +1,7 @@
 import {serveStatic} from 'hono/cloudflare-workers' // @ts-ignore
 import manifest from '__STATIC_CONTENT_MANIFEST'
 import * as index from './index'
+export {CertificateWorkflow} from './order-workflow';
 
 // SPA fallback: 尝试访问请求路径对应的静态文件，失败后回退到 index.html
 index.app.use("*", serveStatic({manifest: manifest, root: "./"}));

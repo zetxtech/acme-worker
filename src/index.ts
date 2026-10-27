@@ -18,6 +18,7 @@ import {readConf} from "./db/conf";
 import {currentUser} from "./middleware/admin";
 import {mountResourceRoutes} from "./routes/resources";
 import {validateSelections} from "./resources";
+import {queueOrder, readOrderWork, validatedEdit, type OrderWork} from "./order-workflow";
 
 // 绑定数据 ###############################################################################
 // DB_SOURCE：空/d1 → Cloudflare D1；mysql → mysql2；prisma → PrismaClient
@@ -29,6 +30,7 @@ export type Bindings = {
     DB_MYSQL_USER?: string, DB_MYSQL_PASS?: string, DB_MYSQL_NAME?: string,
     DATABASE_URL?: string,
     AUTOMATION_KEY?: string,
+    ORDER_WORKFLOW?: DurableObjectNamespace,
     // 邮件 / 站点 / 鉴权 -------------------------------------------
     MAIL_KEYS: string, MAIL_SEND: string, AUTH_KEYS: string, SITE_KEYS?: string,
     SITE_HOST?: string, SITE_TITLE?: string,
@@ -153,32 +155,53 @@ app.use('/apply/', async (c: Context): Promise<Response> => {
             text: "订单提交成功",
         })
         await dao.upsertConf(`ORDER_DEPLOYMENT:${uuid}`, JSON.stringify(selectedTargets), Date.now());
-        // 创建订单后立即推进一次状态机（生成 ACME 订单 + 写入 TXT 挑战记录）
-        // 若推进失败（如 ACME 服务端拒绝），把错误原因回显给前端，便于用户即时看到失败原因
-        let apply_warn: string | null = null;
-        try {
-            await certs.processOne(c.env, uuid);
-            // 再查一次订单，如果已经被置为失败状态（flag=-1），把 text 作为警告返回
-            const fresh: any = await saves.selectDB(
-                c.env.DB_CF, "Apply", {uuid: {value: uuid}});
-            if (fresh && fresh[0] && Number(fresh[0].flag) < 0) {
-                apply_warn = String(fresh[0].text || "证书申请处理失败");
-            }
-        } catch (e) {
-            const {extractAcmeError} = await import("./certs");
-            apply_warn = "证书申请处理失败: " + extractAcmeError(e);
-            console.error("apply processOne error:", e);
-        }
-        if (apply_warn) {
-            return c.json({
-                "flags": 11, "texts": apply_warn, "order": uuid,
-            }, 200);
-        }
-        return c.json({"flags": 0, "texts": "证书申请成功", "order": uuid}, 200);
+        await queueOrder(c.env, uuid);
+        return c.json({"flags": 0, "texts": "申请已受理，将在后台自动处理", "order": uuid}, 202);
     } catch (error) {
         return c.json({"flags": 3, "texts": "请求数据无效: " + error}, 400);
     }
 })
+
+app.post('/apply/:uuid/edit', async (c) => {
+    if (!await users.userAuth(c)) return c.json({flags: 2, texts: '用户尚未登录'}, 401);
+    const dao = await (await import('./db')).ensureDao(c.env);
+    const row = await dao.getApply(c.req.param('uuid'));
+    if (!row || row.mail !== local.getCookie(c, 'mail')) return c.json({flags: 9, texts: '申请不存在'}, 404);
+    if (Number(row.flag) >= 4 || row.cert) return c.json({flags: 9, texts: '签发已开始或完成，原证书已保留'}, 409);
+    const work = await queueOrder(c.env, row.uuid, 'edit');
+    return c.json({flags: 0, revision: work.revision}, 202);
+});
+
+app.post('/apply/:uuid/resume', async (c) => {
+    if (!await users.userAuth(c)) return c.json({flags: 2, texts: '用户尚未登录'}, 401);
+    const dao = await (await import('./db')).ensureDao(c.env);
+    const row = await dao.getApply(c.req.param('uuid'));
+    if (!row || row.mail !== local.getCookie(c, 'mail')) return c.json({flags: 9}, 404);
+    const {revision} = await c.req.json();
+    const work = await readOrderWork(dao, row.uuid);
+    if (work?.intent === 'edit' && work.revision === revision) await queueOrder(c.env, row.uuid);
+    return c.json({flags: 0});
+});
+
+app.put('/apply/:uuid', async (c) => {
+    if (!await users.userAuth(c)) return c.json({flags: 2, texts: "用户尚未登录"}, 401);
+    const mail = local.getCookie(c, 'mail') ?? '';
+    const {ensureDao} = await import('./db');
+    const dao = await ensureDao(c.env);
+    const uuid = c.req.param('uuid');
+    const row = await dao.getApply(uuid);
+    if (!row || row.mail !== mail) return c.json({flags: 9, texts: "申请不存在"}, 404);
+    if (Number(row.flag) >= 4 || row.cert) return c.json({flags: 9, texts: "签发已开始或已完成，原证书已保留，请新建申请"}, 409);
+    try {
+        const input = await c.req.json();
+        const work = await readOrderWork(dao, uuid);
+        if (work?.intent === 'edit' && work.revision !== input.editRevision) return c.json({flags: 9, texts: '编辑会话已变化，请重新打开原申请'}, 409);
+        const payload = await validatedEdit(c.env, mail, input);
+        await dao.upsertConf(`ORDER_EDIT:${uuid}`, JSON.stringify({mail, payload}), Date.now());
+        await queueOrder(c.env, uuid, 'update');
+        return c.json({flags: 0, order: uuid, texts: "更改已受理，原申请编号不变"}, 202);
+    } catch { return c.json({flags: 3, texts: "更改未保存，请检查域名、签发机构和资源权限；原申请已保留"}, 400); }
+});
 
 // 查询申请配额（供前端申请页展示） #########################################################
 app.get('/apply/quota', async (c: Context): Promise<Response> => {
@@ -234,11 +257,27 @@ app.use('/order/', async (c: Context): Promise<Response> => {
         }
         // if (order_data.length < 1)
         //     return c.json({"flags": 6, "texts": "请求订单无效"}, 400);
+        if (order_uuid !== 'all' && !order_data[0]) return c.json({flags: 9, texts: '申请不存在或无权查看'}, 404);
         if (order_acts == undefined || order_acts === "") { // 获取订单信息 -----------
             let order_save: any = order_uuid == "all" ? order_data : order_data[0];
+            if (order_uuid === 'all' && c.env.DB_CF) {
+                const pending = order_data.filter((row) => Number(row.flag) !== 5).map((row) => `ORDER_WORK:${row.uuid}`);
+                const states = new Map<string, OrderWork>();
+                for (let cursor = 0; cursor < pending.length; cursor += 50) {
+                    const keys = pending.slice(cursor, cursor + 50);
+                    const result = await c.env.DB_CF.prepare(`SELECT name,data FROM Confs WHERE name IN (${keys.map(() => '?').join(',')})`).bind(...keys).all();
+                    for (const row of result.results) {
+                        try { states.set(row.name.slice('ORDER_WORK:'.length), JSON.parse(row.data)); } catch {}
+                    }
+                }
+                order_save = order_data.map((row) => ({...row, work: states.get(row.uuid)}));
+            }
             // 单个订单附带边缘证书下发状态，便于用户确认证书是否已同步到 CDN
             let edge_state: Record<string, any> = {};
             if (order_uuid !== "all" && order_data[0]) {
+                const dao = await (await import('./db')).ensureDao(c.env);
+                order_save = {...order_save, work: await readOrderWork(dao, order_uuid),
+                    targetIds: JSON.parse(await dao.getConf(`ORDER_DEPLOYMENT:${order_uuid}`) ?? '[]')};
                 try {
                     const {readOrderEdgeState} = await import("./edge");
                     edge_state = await readOrderEdgeState(c.env as Bindings, order_uuid);
@@ -248,48 +287,25 @@ app.use('/order/', async (c: Context): Promise<Response> => {
             }
             return c.json({"flags": 0, "order": order_save, "edge": edge_state}, 200);
         } else { // 对订单执行操作 ----------------------------------------------------------
-            if (order_acts === "verify" && order_data[0].flag == 2) {// 提交验证请求
-                await saves.updateDB(c.env.DB_CF, "Apply", {flag: 3}, {uuid: order_uuid})
-                let order_info = order_data[0]; // 获取当前订单详细情况
-                let order_mail = order_info['mail']; // 当前订单用户邮箱
-                let order_user: any = (await saves.selectDB( // 查询申请者信息
-                    c.env.DB_CF, "Users", {mail: {value: order_mail}}))[0];
-                await opDomain(c.env, order_user, order_info, ["all"]);
-            } else if (order_acts === "process") { // 立即按当前 flag 一键推进到底
-                let order_info = order_data[0]; // 获取当前订单详细情况
-                let cur_flag = Number(order_info['flag']);
-                if (cur_flag === 5 || cur_flag < 0)
-                    return c.json({"flags": 0, "texts": "当前订单无需处理", "order": order_acts});
-                if (cur_flag === 2) { // 等待 DNS 配置阶段：立即触发一次验证，再推进到底
-                    await saves.updateDB(c.env.DB_CF, "Apply", {flag: 3}, {uuid: order_uuid});
-                    let order_mail = order_info['mail'];
-                    let order_user: any = (await saves.selectDB(
-                        c.env.DB_CF, "Users", {mail: {value: order_mail}}))[0];
-                    let fresh_info: any = (await saves.selectDB(
-                        c.env.DB_CF, "Apply", {uuid: {value: order_uuid}}))[0];
-                    await opDomain(c.env, order_user, fresh_info, ["all"]);
-                    return c.json({flags: 0, texts: "验证已提交，后续任务将继续推进", order: order_acts});
+            if (!order_data[0] || order_uuid === 'all') return c.json({flags: 9, texts: "申请不存在"}, 404);
+            if (order_acts === "modify")
+                return c.json({flags: 9, texts: "请通过编辑表单修改，原申请已保留"}, 409);
+            if (["process", "verify", "single", "reload", "re_new", "cancel"].includes(order_acts)) {
+                const row = order_data[0];
+                if (order_acts === 'cancel' && Number(row.flag) === 5) return c.json({flags: 9, texts: "已签发证书不会被取消申请删除，请使用吊销操作"}, 409);
+                const intent: OrderWork['intent'] = order_acts === 'cancel' ? 'cancel'
+                    : ['reload', 're_new'].includes(order_acts) || Number(row.flag) < 0 ? 'retry'
+                        : ['verify', 'single'].includes(order_acts) ? 'verify' : 'process';
+                if (order_acts === 'single' && !JSON.parse(row.list).some((domain: any) => domain.name === order_push)) {
+                    return c.json({flags: 9, texts: "域名不属于此申请"}, 400);
                 }
-                await certs.processOne(c.env, order_uuid);
-            } else if (order_acts === "reload")
-                await saves.updateDB(c.env.DB_CF, "Apply", {flag: 0}, {uuid: order_uuid})
-            else if (order_acts === "modify" || order_acts === "cancel")
-                await saves.deleteDB(c.env.DB_CF, "Apply", {uuid: order_uuid})
-            else if (order_acts === "single") {
-                order_acts += "-" + order_push
-                if (order_push == undefined || order_push == "undefined")
-                    return c.json({"flags": 5, "texts": "请求操作无效", "order": order_acts});
-                let order_info = order_data[0]; // 获取当前订单详细情况
-                let order_mail = order_info['mail']; // 当前订单用户邮箱
-                let order_user: any = (await saves.selectDB( // 查询申请者信息
-                    c.env.DB_CF, "Users", {mail: {value: order_mail}}))[0];
-                await opDomain(c.env, order_user, order_info, [order_push]);
-            } else if (order_acts === "ca_get") {
+                const work = await queueOrder(c.env, order_uuid, intent, order_acts === 'single' ? [order_push] : undefined);
+                return c.json({flags: 0, order: order_acts, texts: work.detail}, 202);
+            }
+            if (order_acts === "ca_get") {
                 order_acts = order_data[0].cert;
             } else if (order_acts === "ca_key") {
                 order_acts = order_data[0].keys;
-            } else if (order_acts === "re_new") {
-                await saves.updateDB(c.env.DB_CF, "Apply", {flag: 0}, {uuid: order_uuid})
             } else if (order_acts === "edge_push") {
                 // 手动把当前证书重新下发到所有启用的边缘平台
                 const {pushOrder} = await import("./edge");

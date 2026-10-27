@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { App, Button, Skeleton } from 'antd';
+import { Alert, App, Button, Skeleton } from 'antd';
 import {
   ArrowLeft,
   Copy,
@@ -33,24 +33,45 @@ export default function OrderPage() {
   const [loading, setLoading] = useState(true);
   const [operating, setOperating] = useState(false);
   const [actionTip, setActionTip] = useState('处理中，请稍候...');
+  const requestId = useRef(0);
+  const [syncError, setSyncError] = useState(false);
 
-  const load = async () => {
+  const load = async (silent = false) => {
     if (!uuid) return;
-    setLoading(true);
+    const sequence = ++requestId.current;
+    if (!silent) setLoading(true);
     try {
-      const data = await getOrder(uuid);
-      setOrder(data);
-    } catch {
-      setOrder(null);
+      const data = await getOrder(uuid, silent);
+      if (sequence === requestId.current) { setOrder(data); setSyncError(false); }
+    } catch (error: any) {
+      if (sequence === requestId.current) {
+        setSyncError(error.status !== 404);
+        if (error.status === 404) setOrder(null);
+      }
     } finally {
-      setLoading(false);
+      if (sequence === requestId.current) setLoading(false);
     }
   };
 
   useEffect(() => {
     load();
+    return () => { requestId.current++; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uuid]);
+
+  const watching = !!order && (order.work?.intent === 'edit' || ['queued', 'running', 'waiting'].includes(order.work?.status ?? '')
+    || order.flag >= 0 && order.flag < 5 && !['action_required', 'failed', 'cancelled'].includes(order.work?.status ?? ''));
+  useEffect(() => {
+    if (!watching) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (!document.hidden && navigator.onLine) await load(true);
+      if (!stopped) timer = setTimeout(poll, 4000);
+    };
+    timer = setTimeout(poll, 1500);
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [uuid, watching]);
 
   const handleAction = async (
     action: OrderAction,
@@ -66,6 +87,7 @@ export default function OrderPage() {
     },
   ) => {
     if (!uuid) return;
+    if (action === 'modify') { navigate(`/apply?edit=${encodeURIComponent(uuid)}`); return; }
 
     // 吊销原因（仅在 ca_del + pickRevokeReason 时使用）
     let revokeReason: RevokeReason = RevokeReason.Unspecified;
@@ -91,22 +113,12 @@ export default function OrderPage() {
           } else {
             message.warning('文件不存在');
           }
-        } else if (action === 'cancel' || action === 'modify') {
-          message.success('操作成功');
-          setTimeout(() => navigate('/certs'), 500);
         } else {
-          await load();
-          // 后端会带回每个域名的处理结果；若 DNS 尚未生效仍会停在待验证，需明确告知原因
-          if (action === 'verify' || action === 'single') {
-            const pending = !!texts && /未|失败|稍后|重试/.test(texts);
-            if (pending) message.warning(texts, 6);
-            else message.success('验证完成');
-          } else {
-            message.success('操作成功');
-          }
+          message.info(texts || '已受理，将在后台继续处理');
+          await load(true);
         }
-      } catch {
-        /* 拦截器已 toast */
+      } catch (error: any) {
+        if (!error.status) message.error(error.message || '操作未受理，请重试');
       } finally {
         setOperating(false);
       }
@@ -164,7 +176,7 @@ export default function OrderPage() {
     }
   };
 
-  if (loading) {
+  if (loading && !order) {
     return (
       <PageShell>
         <Skeleton active style={{ marginTop: 24 }} />
@@ -177,9 +189,9 @@ export default function OrderPage() {
       <PageShell>
         <div className={styles.notFound}>
           <Kaomoji mood="error" size={56} />
-          <h2>订单不存在或已被删除</h2>
-          <Button onClick={() => navigate('/certs')} icon={<ArrowLeft size={14} />}>
-            返回证书列表
+          <h2>{syncError ? '暂时无法读取申请' : '申请不存在或无权查看'}</h2>
+          <Button onClick={() => syncError ? void load() : navigate('/certs')} icon={<ArrowLeft size={14} />}>
+            {syncError ? '重试' : '返回证书列表'}
           </Button>
         </div>
       </PageShell>
@@ -190,7 +202,7 @@ export default function OrderPage() {
   const colorVariant = FLAG_COLOR[order.flag] as any;
 
   return (
-    <PageShell>
+    <PageShell className={styles.orderPage}>
       {/* 顶部：路径 + 返回 + 复制ID */}
       <div className={styles.greet}>
         <div className={styles.topActions}>
@@ -204,7 +216,7 @@ export default function OrderPage() {
           <Button
             size="small"
             icon={<RefreshCw size={12} />}
-            onClick={load}
+            onClick={() => void load()}
             loading={loading}
           >
             刷新
@@ -220,7 +232,14 @@ export default function OrderPage() {
       </div>
 
       {/* 进度条 */}
-      <OrderProgress flag={order.flag} />
+      <OrderProgress flag={order.flag} cancelled={order.work?.status === 'cancelled'}
+        label={order.work?.status === 'cancelled' ? order.cert ? '已停止续期，原证书已保留' : '已取消'
+          : order.work?.intent === 'edit' ? '编辑中' : order.flag === 2 && order.work?.status !== 'action_required' ? '域名验证中' : undefined}/>
+
+      {order.work && order.work.status !== 'complete' && <Alert showIcon
+        type={order.work.status === 'failed' ? 'error' : order.work.status === 'action_required' ? 'warning' : 'info'}
+        message={order.work.detail}
+        description={syncError ? '连接暂时中断，正在重新同步状态' : watching ? '后台持续处理中，离开页面不会中断申请' : undefined}/>}
 
       {/* 证书信息 */}
       <CertInfo order={order} />
@@ -247,11 +266,7 @@ export default function OrderPage() {
       />
 
       {/* 操作中遮罩：与页面加载一致的半透明遮罩，整页均匀变暗 */}
-      {operating && (
-        <div className={styles.busyMask}>
-          <Loading text={actionTip} />
-        </div>
-      )}
+      {operating && <Loading full overlay text={actionTip} />}
     </PageShell>
   );
 }

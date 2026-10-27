@@ -1,5 +1,18 @@
 # Findings
 
+## Background Lifecycle Repair (2026-10-27)
+- The submission handler awaited the ACME/DNS state machine. The modify and cancel operations shared a hard-delete branch. The state machine stopped between persisted stages, and the detail page did not poll. These were business-flow defects, not just missing loading messages.
+- A transformed PageShell trapped descendant fixed overlays. Body-level portals now cover the entire layout while the short acceptance request is pending; long CA/DNS work never holds that overlay open.
+- Worker-native SQLite Durable Object alarms provide durable continuation without another backend or a new cron allocation. The existing D1 stores the work outbox, per-order lease, revision, edits, deployment state and encrypted artifact backup.
+- A lease alone does not protect command intent: a cancellation can arrive after the worker reads its revision but before it writes running state. A deterministic regression reproduced the lost cancellation. Conditional Confs updates now refuse stale revisions before starting work.
+- Automated DNS waiting, public-resolver failure, provider failure, manual configuration, CA validation, issuance, deployment and cleanup are separate states. Domain flag 4 means verified, not the order-level issuing phase.
+- Post-issuance DNS cleanup must remain a scheduled stage; finishing certificate issuance cannot stop pending cleanup. Its retry never invalidates or reissues an already-issued certificate.
+- Final lifecycle suite: 40 passed, zero skipped, including actual local workerd alarms and SSH/SFTP plus synthetic-API desktop/mobile browser flows. Publisher binding/network-retry checks: 6 passed. Real provider issuance is not implied by fixture success.
+- Production b60ce2aa-9568-486b-bfc1-f206f16724d8 is verified: current entry matches the build, homepage/assets 200, database healthy, anonymous apply 401, workflow binding active, original D1 and 31 DNS services plus AUTOMATION_KEY retained. The original request remains in real DNS propagation waiting; it is not reported as issued.
+- Local proxy/TLS failures blocked deployment verification. IPv4-first/direct Node networking worked; environment changes were scoped and restored. Verification still required a successful remote Go runtime check before main upload.
+
+## Earlier Findings
+
 - The current application uses acme-client with a persistent order state machine.
 - dns-auto means Cloudflare delegation, not a generic DNS API account.
 - CA choices are static and default to Google even without configured credentials.

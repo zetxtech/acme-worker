@@ -72,7 +72,7 @@ instance.interceptors.response.use(
 
     if (err.response?.status === 401 || err.response?.data?.flags === 2) {
       onUnauthorized();
-    } else {
+    } else if (!(err.config as any)?.silent) {
       toastError(finalMsg);
     }
     // 把业务错误文案注入到 reject 对象的 message 字段，
@@ -93,8 +93,9 @@ export const http = instance;
 export async function apiGet<T = ApiResp>(
   url: string,
   params?: Record<string, any>,
+  options?: {silent?: boolean; signal?: AbortSignal},
 ): Promise<T> {
-  const res = await instance.get<T>(url, { params });
+  const res = await instance.get<T>(url, { params, ...options });
   return res.data;
 }
 

@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from './request';
+import { apiGet, apiPost, http } from './request';
 import { safeJsonParse } from '@utils/format';
 import type {
   ApiResp,
@@ -16,10 +16,14 @@ import type {
 export async function applyCert(
   payload: ApplyPayload,
   captchaToken?: string,
+  editId?: string,
+  editRevision?: string,
 ): Promise<{ uuid: string; warning?: string }> {
   const body: any = { ...payload };
   if (captchaToken) body.captcha_token = captchaToken;
-  const data = await apiPost<ApiResp>('/apply/', body);
+  if (editRevision) body.editRevision = editRevision;
+  const data = editId ? (await http.put(`/apply/${encodeURIComponent(editId)}`, body)).data as ApiResp
+    : await apiPost<ApiResp>('/apply/', body);
   // flags===0  成功；flags===11 表示订单已创建但后端推进时失败，需把原因带回给 UI 展示
   if (data.flags === 0) {
     return { uuid: data.order as string };
@@ -45,8 +49,8 @@ export async function fetchApplyQuota(): Promise<{
 /**
  * 获取订单列表（全部）
  */
-export async function listOrders(): Promise<OrderRaw[]> {
-  const data = await apiGet<ApiResp>('/order/', { id: 'all' });
+export async function listOrders(silent = false): Promise<OrderRaw[]> {
+  const data = await apiGet<ApiResp>('/order/', { id: 'all' }, {silent});
   if (data.flags !== 0) throw new Error(data.texts || '获取订单列表失败');
   return (data.order || []) as OrderRaw[];
 }
@@ -54,8 +58,8 @@ export async function listOrders(): Promise<OrderRaw[]> {
 /**
  * 获取单个订单
  */
-export async function getOrder(uuid: string): Promise<Order> {
-  const data = await apiGet<ApiResp>('/order/', { id: uuid });
+export async function getOrder(uuid: string, silent = false): Promise<Order> {
+  const data = await apiGet<ApiResp>('/order/', { id: uuid }, {silent});
   if (data.flags !== 0) throw new Error(data.texts || '获取订单失败');
   const raw = data.order as OrderRaw;
   return {
@@ -64,6 +68,16 @@ export async function getOrder(uuid: string): Promise<Order> {
     list: safeJsonParse(raw.list) || [],
     data: safeJsonParse(raw.data),
   };
+}
+
+export async function beginOrderEdit(uuid: string): Promise<string> {
+  const result = await apiPost<{flags: number; revision: string; texts?: string}>(`/apply/${encodeURIComponent(uuid)}/edit`, {});
+  if (result.flags !== 0) throw new Error(result.texts || '无法编辑此申请');
+  return result.revision;
+}
+
+export async function endOrderEdit(uuid: string, revision: string): Promise<void> {
+  await apiPost(`/apply/${encodeURIComponent(uuid)}/resume`, {revision});
 }
 
 /**

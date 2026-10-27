@@ -6,7 +6,7 @@ import {isAbsolute, join, resolve} from "node:path";
 import test from "node:test";
 import {collectCatalog, compareCatalogs, groupShardImports, syncFromSource} from "../scripts/sync-lego-dns-providers.mjs";
 import {createOverlay} from "../scripts/create-lego-doh-overlay.mjs";
-import {deploymentPlan, mainDeploymentConfig, remoteShardMatches} from "../scripts/deploy-lego-shards.mjs";
+import {deploymentPlan, mainDeploymentConfig, remoteShardMatches, verifierFetch} from "../scripts/deploy-lego-shards.mjs";
 
 test("ordinary production deployment preserves DNS shard bindings through the verified publisher", () => {
     const settings = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -18,7 +18,10 @@ test("main deployment uses config-relative portable paths and preserves unrelate
     const projectRoot = resolve("fixture-project");
     const directory = join(projectRoot, "_artifacts", "lego-dns");
     const services = [{binding: "LEGO_DNS_SHARD_001", service: "acme-lego-shard-001"}];
+    const durable = {bindings: [{name: 'ORDER_WORKFLOW', class_name: 'CertificateWorkflow'}]};
+    const migrations = [{tag: 'v1-workflow', new_sqlite_classes: ['CertificateWorkflow']}];
     const config = mainDeploymentConfig({name: "acme", main: "src/cfapp.ts", site: {bucket: "./public"},
+        durable_objects: durable, migrations,
         alias: {"cpu-features": "./src/deploy/cpu-features.cjs"},
         services: [{binding: "OTHER", service: "other"}, {binding: "LEGO_DNS_SHARD_001", service: "stale"}]},
     projectRoot, directory, services);
@@ -28,6 +31,34 @@ test("main deployment uses config-relative portable paths and preserves unrelate
     assert.equal(resolve(directory, config.main), join(projectRoot, "src", "cfapp.ts"));
     assert.equal(resolve(directory, config.alias["cpu-features"]), join(projectRoot, "src", "deploy", "cpu-features.cjs"));
     assert.deepEqual(config.services, [{binding: "OTHER", service: "other"}, ...services]);
+    assert.deepEqual(config.durable_objects, durable);
+    assert.deepEqual(config.migrations, migrations);
+});
+
+test('verifier retries transient connections with a fresh deadline and never pretends success', async () => {
+    let requests = 0;
+    const signals = [];
+    const response = await verifierFetch('https://verifier.example/check', {method: 'POST'}, async (_url, options) => {
+        signals.push(options.signal);
+        if (++requests === 1) throw new Error('connection reset');
+        return Response.json({ok: true});
+    });
+    assert.equal(requests, 2);
+    assert.notEqual(signals[0], signals[1]);
+    assert.equal((await response.json()).ok, true);
+    requests = 0;
+    await assert.rejects(verifierFetch('https://verifier.example/check', {method: 'POST'}, async () => {
+        requests++;
+        throw new Error('connection reset');
+    }), /main Worker unchanged/);
+    assert.equal(requests, 3);
+    requests = 0;
+    const unavailable = await verifierFetch('https://verifier.example/check', {method: 'POST'}, async () => {
+        requests++;
+        return new Response('unavailable', {status: 503});
+    });
+    assert.equal(unavailable.status, 503);
+    assert.equal(requests, 3);
 });
 
 test("deployment recovery only trusts matching remote versions, hashes and provider coverage", () => {
@@ -180,4 +211,17 @@ test("official TOML separates credentials/options and check mode is deterministi
         assert.equal(readFileSync(generated, "utf8"), before);
         assert.equal(readdirSync(root).includes("credentials.json"), false);
     } finally { rmSync(root, {recursive: true, force: true}); }
+});
+
+test('verifier transport protects authenticated control requests without changing credentials', async () => {
+    let attempts = 0;
+    const response = await verifierFetch('https://api.cloudflare.com/client/v4/accounts/fixture/workers/scripts',
+        {method: 'GET', headers: {Authorization: 'Bearer synthetic-control-token'}}, async (url, options) => {
+            assert.equal(new URL(url).hostname, 'api.cloudflare.com');
+            assert.equal(options.headers.Authorization, 'Bearer synthetic-control-token');
+            if (++attempts < 3) throw new Error('temporary connection reset');
+            return Response.json({success: true, result: []});
+        });
+    assert.equal(attempts, 3);
+    assert.equal((await response.json()).success, true);
 });

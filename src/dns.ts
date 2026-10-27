@@ -152,7 +152,7 @@ export async function txtPropagated(name: string, expected: string): Promise<boo
         const response = await fetch(`${resolver}?${new URLSearchParams({name, type: "TXT"})}`, {
             headers: {Accept: "application/dns-json"}, signal: AbortSignal.timeout(5000), redirect: "manual",
         });
-        if (!response.ok) return false;
+        if (!response.ok) throw new Error(`Public DNS query failed (${new URL(resolver).hostname}, HTTP ${response.status})`);
         const data = await readBoundedJson(response);
         const matched = data.Answer?.some((record: any) => record.type === 16
             && (String(record.data).match(/"([^"\\]*(?:\\.[^"\\]*)*)"/g) ?? [])
