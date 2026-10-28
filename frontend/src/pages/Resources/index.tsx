@@ -3,7 +3,8 @@ import {Alert, App, Button, Checkbox, Collapse, Form, Input, InputNumber, Modal,
 import {Cable, ChevronRight, Pencil, Plus, RefreshCw, Trash2} from 'lucide-react';
 import type {DefaultOptionType} from 'antd/es/select';
 import PageShell from '@components/Layout/PageShell';
-import {deleteResource, fetchDnsProviderCatalog, fetchResources, saveResource, testResource, type DnsProviderOption, type WorkflowResource} from '@api/resources';
+import {deleteResource, fetchDnsProviderCatalog, fetchResources, saveResource, testResource, type DnsProviderOption, type HttpDiagnostic, type WorkflowResource} from '@api/resources';
+import RequestDetails from '@components/molecules/RequestDetails';
 import {useAuthStore} from '@stores/useAuthStore';
 
 const providers = {
@@ -16,13 +17,15 @@ const labels: Record<string, string> = {
   traefikMode: 'Traefik \u5b58\u50a8\u65b9\u5f0f', dynamicPath: '\u52a8\u6001 TLS \u914d\u7f6e\u8def\u5f84', acmePath: 'acme.json \u8def\u5f84', resolver: 'Resolver',
   url: '\u63a5\u6536\u5730\u5740', method: '\u8bf7\u6c42\u65b9\u5f0f', zone_id: 'Zone ID', site_id: 'Site ID', hosts: '\u52a0\u901f\u57df\u540d', region: '\u5730\u57df', alias: '\u8bc1\u4e66\u540d\u524d\u7f00', cert_name: '\u8bc1\u4e66\u540d\u524d\u7f00',
   mode: '上传后操作', certificate_id: '已有云证书 ID（可选）',
+  market: '账号站点',
   token: 'API Token', secretId: 'SecretId', secretKey: 'SecretKey', accessKeyId: 'AccessKeyId', accessKeySecret: 'AccessKeySecret',
   password: '\u767b\u5f55\u5bc6\u7801', privateKey: 'SSH \u79c1\u94a5', passphrase: '\u79c1\u94a5\u5bc6\u7801', pfxPassword: 'PFX \u5bc6\u7801',
   authToken: '\u8ba4\u8bc1 Token', authorization: 'Authorization', hmacSecret: '\u7b7e\u540d\u5bc6\u94a5 (HMAC)',
 };
 
 function defaults(provider: string): Record<string, any> {
-  if (provider === 'edgeone') return {mode: 'upload'};
+  if (provider === 'edgeone') return {mode: 'upload', market: 'mainland'};
+  if (provider === 'esa') return {market: 'mainland'};
   if (provider === 'https') return {method: 'POST', timeout: 10000};
   if (['ssh', 'nginx', 'traefik'].includes(provider)) return {port: 22, timeout: 25000, format: 'pem', privateKeyMode: '0600',
     certificatePath: provider === 'traefik' ? '/etc/traefik/tls/fullchain.pem' : '/etc/nginx/tls/fullchain.pem',
@@ -47,6 +50,7 @@ export default function Resources({kind}: {kind: 'dns' | 'targets'}) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string>();
+  const [testFailures, setTestFailures] = useState<Record<string, {summary: string; diagnostic?: HttpDiagnostic}>>({});
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<WorkflowResource>();
   const [checking, setChecking] = useState<WorkflowResource>();
@@ -58,6 +62,7 @@ export default function Resources({kind}: {kind: 'dns' | 'targets'}) {
   const scopeMode = Form.useWatch('scopeMode', form) ?? 'account';
   const sharing = Form.useWatch('sharing', form) ?? 'private';
   const edgeMode = Form.useWatch(['config', 'mode'], form) ?? 'upload';
+  const market = Form.useWatch(['config', 'market'], form) ?? 'mainland';
   const cloudTarget = kind === 'targets' && ['esa', 'edgeone'].includes(provider);
   const dnsSchema = dnsProviders.find((item) => item.applicationProvider === provider)?.resourceSchema;
   const fieldLabel = (field: string) => labels[field] ?? field;
@@ -100,7 +105,7 @@ export default function Resources({kind}: {kind: 'dns' | 'targets'}) {
     setEditing(resource);
     form.resetFields();
     const selected = resource?.provider ?? (kind === 'dns' ? 'cloudflare' : 'nginx');
-    form.setFieldsValue(resource ? {...resource, scopeMode: resource.scopeMode ?? 'zones', sharing: resource.grants.length ? 'shared' : 'private', secrets: {}, clearSecrets: false}
+    form.setFieldsValue(resource ? {...resource, config: {...defaults(selected), ...resource.config}, scopeMode: resource.scopeMode ?? 'zones', sharing: resource.grants.length ? 'shared' : 'private', secrets: {}, clearSecrets: false}
       : {provider: selected, enabled: true, scopeMode: kind === 'dns' ? 'account' : ['edgeone', 'esa'].includes(selected) ? 'certificate' : 'zones', sharing: 'private', zones: [], grants: [], config: defaults(selected), secrets: {}});
     setOpen(true);
   };
@@ -120,9 +125,13 @@ export default function Resources({kind}: {kind: 'dns' | 'targets'}) {
   };
   const test = async (resource: WorkflowResource, domain?: string, confirmWrite = false) => {
     setTesting(resource.id);
+    setTestFailures((previous) => { const next = {...previous}; delete next[resource.id]; return next; });
     try { const result = await testResource(kind, resource.id, domain, confirmWrite); message.success(result.zone?.writable
       ? '\u5df2\u9a8c\u8bc1 DNS \u5199\u5165\u3001\u4f20\u64ad\u548c\u6e05\u7406' : result.zone ? `\u5df2\u627e\u5230\u533a\u57df ${result.zone.name}` : '\u8fde\u63a5\u901a\u8fc7\uff0c\u672a\u4fee\u6539\u8bc1\u4e66'); await load(); }
-    finally { setTesting(undefined); }
+    catch (error: any) {
+      setTestFailures((previous) => ({...previous, [resource.id]: {summary: error.message || '连接检查失败', diagnostic: error.diagnostic}}));
+      throw error;
+    } finally { setTesting(undefined); }
   };
   const startCheck = async () => {
     try {
@@ -131,8 +140,8 @@ export default function Resources({kind}: {kind: 'dns' | 'targets'}) {
       setChecking(undefined);
     } catch (error: any) { if (!error.errorFields) message.error(error.message || '\u68c0\u67e5\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5'); }
   };
-  const configFields = kind === 'dns' ? (dnsSchema?.options.map((field) => field.name) ?? []) : provider === 'https' ? ['url', 'method', 'timeout'] : provider === 'edgeone' ? ['mode', 'certificate_id', ...(edgeMode === 'bind' ? ['zone_id', 'hosts'] : []), 'region', 'alias']
-    : provider === 'esa' ? ['site_id', 'certificate_id', 'cert_name'] : ['ssh', 'nginx', 'traefik'].includes(provider)
+  const configFields = kind === 'dns' ? (dnsSchema?.options.map((field) => field.name) ?? []) : provider === 'https' ? ['url', 'method', 'timeout'] : provider === 'edgeone' ? ['market', 'mode', 'certificate_id', ...(edgeMode === 'bind' ? ['zone_id', 'hosts'] : []), 'region', 'alias']
+    : provider === 'esa' ? ['market', 'site_id', 'certificate_id', 'cert_name'] : ['ssh', 'nginx', 'traefik'].includes(provider)
       ? ['host', 'port', 'username', 'fingerprint', 'timeout', ...(provider === 'ssh' ? ['format'] : []),
         ...(provider === 'traefik' ? ['traefikMode'] : []),
         ...(provider === 'traefik' && traefikMode === 'acme-json' ? ['acmePath', 'resolver']
@@ -142,6 +151,7 @@ export default function Resources({kind}: {kind: 'dns' | 'targets'}) {
     : ['alidns', 'esa'].includes(provider) ? ['accessKeyId', 'accessKeySecret'] : provider === 'https' ? ['authToken', 'authorization', 'hmacSecret']
       : ['password', 'privateKey', 'passphrase', ...(format === 'pfx' ? ['pfxPassword'] : [])];
   const choices: Record<string, {label: string; value: string}[]> = {
+    market: [{value: 'mainland', label: '中国站'}, {value: 'international', label: '国际站'}],
     mode: [{value: 'upload', label: '仅上传到腾讯云 SSL 控制台'}, {value: 'bind', label: '上传并绑定 EdgeOne 域名'}],
     method: [{value: 'POST', label: 'POST'}, {value: 'PUT', label: 'PUT'}], format: [{value: 'pem', label: 'PEM'}, {value: 'pfx', label: 'PFX'}],
     privateKeyMode: [{value: '0600', label: '0600'}, {value: '0640', label: '0640'}],
@@ -162,7 +172,11 @@ export default function Resources({kind}: {kind: 'dns' | 'targets'}) {
     label={<span style={{whiteSpace: 'normal', overflowWrap: 'anywhere'}}>{fieldLabel(field)}</span>}
     tooltip={kind === 'dns' ? dnsSchema?.options.find((item) => item.name === field)?.description : undefined}
     rules={[{required: ['host', 'username', 'fingerprint', 'url', 'certificatePath', 'privateKeyPath', 'pfxPath', 'acmePath', 'resolver', 'dynamicPath'].includes(field)}]}>
-    {choices[field] ? <Select options={choices[field]}/> : field === 'hosts' ? <Select mode="tags" open={false} tokenSeparators={[',', ' ']}/>
+    {choices[field] ? <Select options={choices[field]} onChange={field === 'market' ? () => {
+      for (const key of ['site_id', 'zone_id', 'certificate_id', 'hosts']) form.setFieldValue(['config', key], undefined);
+      form.setFieldValue('secrets', {});
+      if (editing) form.setFieldValue('clearSecrets', true);
+    } : undefined}/> : field === 'hosts' ? <Select mode="tags" open={false} tokenSeparators={[',', ' ']}/>
       : ['port', 'timeout'].includes(field) ? <InputNumber min={1} max={field === 'port' ? 65535 : 28000} style={{width: '100%'}}/>
         : <Input placeholder={field === 'fingerprint' ? 'SHA256:...' : undefined} autoComplete="off"/>}
   </Form.Item>);
@@ -182,7 +196,9 @@ export default function Resources({kind}: {kind: 'dns' | 'targets'}) {
       {title: '\u540d\u79f0', dataIndex: 'name'}, {title: '\u670d\u52a1\u5546', dataIndex: 'provider', render: (value: string) => dnsProviders.find((item) => item.applicationProvider === value)?.displayName ?? providers.targets.find((item) => item.value === value)?.label ?? value.replace(/^lego:/, '')},
       {title: '适用范围', dataIndex: 'zones', render: (zones: string[], item) => item.scopeMode === 'certificate' ? '所选证书'
         : !zones.length && item.scopeMode === 'account' ? '\u6309\u7533\u8bf7\u57df\u540d\u81ea\u52a8\u67e5\u627e' : <Space wrap>{zones.map((zone) => <Tag key={zone}>{zone}</Tag>)}</Space>},
-      {title: '\u72b6\u6001', render: (_, item) => <Tag color={!item.enabled ? 'default' : kind === 'dns' && (!item.connectionChecked || item.available === false) ? 'default' : 'green'}>{!item.enabled ? '\u5df2\u505c\u7528' : kind === 'dns' && (!item.connectionChecked || item.available === false) ? '\u5f85\u68c0\u67e5' : '\u6b63\u5e38'}</Tag>},
+      {title: '\u72b6\u6001', render: (_, item) => testFailures[item.id]
+        ? <RequestDetails summary={testFailures[item.id].summary} diagnostic={testFailures[item.id].diagnostic}/>
+        : <Tag color={!item.enabled ? 'default' : kind === 'dns' && (!item.connectionChecked || item.available === false) ? 'default' : 'green'}>{!item.enabled ? '\u5df2\u505c\u7528' : kind === 'dns' && (!item.connectionChecked || item.available === false) ? '\u5f85\u68c0\u67e5' : '\u6b63\u5e38'}</Tag>},
       {title: '\u64cd\u4f5c', key: 'actions', width: 148, render: (_, item) => <Space>
         <Tooltip title={'\u68c0\u67e5\u8fde\u63a5'}><Button aria-label={'\u68c0\u67e5\u8fde\u63a5'} icon={<Cable size={15}/>} loading={testing === item.id} onClick={() => {
           if (kind === 'dns') { checkForm.resetFields(); checkForm.setFieldsValue({domain: item.zones[0] ?? '', confirmWrite: false}); setChecking(item); }
@@ -205,6 +221,10 @@ export default function Resources({kind}: {kind: 'dns' | 'targets'}) {
           description="首次上传后会保存云端证书 ID，续期使用原 ID 更新。已有证书可填写 ID 接管。"/>}
         {provider === 'edgeone' && <Alert type="info" showIcon style={{marginBottom: 16}} message="证书先上传腾讯云 SSL 控制台，可选择是否绑定 EdgeOne 域名"
           description={<>每个域名最多使用一张 RSA 和一张 ECC 证书，不支持 SM2。更新旧证书关联时将等待云端任务完成，不删除旧证书。<a href="https://console.tencentcloud.com/ssl" target="_blank" rel="noreferrer">打开 SSL 控制台</a></>}/>}
+        {cloudTarget && <Alert type="info" showIcon style={{marginBottom: 16}} message={market === 'international' ? '请使用国际站账号的密钥与站点 ID' : '请使用中国站账号的密钥与站点 ID'}
+          description={provider === 'esa'
+            ? `API：${market === 'international' ? 'esa.ap-southeast-1.aliyuncs.com（新加坡）' : 'esa.cn-hangzhou.aliyuncs.com（杭州）'}`
+            : `EdgeOne API：${market === 'international' ? 'teo.intl.tencentcloudapi.com' : 'teo.tencentcloudapi.com'}；SSL：ssl.tencentcloudapi.com`}/>}
         {kind === 'dns' && provider.startsWith('lego:') && <Alert type="info" showIcon style={{marginBottom: 16}}
           message={'\u4fdd\u5b58\u540e\u8bf7\u70b9\u51fb\u201c\u68c0\u67e5\u8fde\u63a5\u201d\uff0c\u9009\u62e9\u5b9e\u9645\u57df\u540d\u5e76\u786e\u8ba4\u540e\u518d\u5f00\u59cb\u68c0\u67e5\u3002'}/>}
         {provider === 'traefik' && traefikMode === 'acme-json' && <Alert style={{marginBottom: 16}} type="warning" showIcon message={'\u5c06\u5408\u5e76\u6240\u9009 resolver \u4e2d\u7684\u8bc1\u4e66\u3002\u8bf7\u786e\u8ba4 Traefik \u4e0d\u4f1a\u540c\u65f6\u5199\u5165\u8be5\u6587\u4ef6\u3002'}/>}

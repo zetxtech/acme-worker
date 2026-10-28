@@ -45,6 +45,7 @@ import {
 } from '@api/adminConfs';
 import { useBootstrapStore } from '@stores/useBootstrapStore';
 import { configureDcv, fetchCapabilities, type DcvState } from '@api/resources';
+import styles from './System.module.css';
 
 type Items = Record<string, any>;
 type Touched = Record<string, boolean>;
@@ -104,6 +105,7 @@ export default function AdminSystemPage() {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<Items>({});
   const [secretKeys, setSecretKeys] = useState<Set<string>>(new Set());
+  const [configuredSecrets, setConfiguredSecrets] = useState<Record<string, boolean>>({});
   const [dirty, setDirty] = useState<Touched>({});
 
   // DCV 托管设置向导
@@ -154,6 +156,7 @@ export default function AdminSystemPage() {
       if (res.flags === 0) {
         setItems(res.items);
         setSecretKeys(new Set(res.secret_keys));
+        setConfiguredSecrets(Object.fromEntries(res.secret_keys.map((key) => [key, !!res.items[key]?.configured])));
         setDirty({});
       } else {
         message.error(res.texts || '加载失败');
@@ -183,6 +186,10 @@ export default function AdminSystemPage() {
       if (res?.flags === 0) {
         message.success(`${name} 已保存`);
         setDirty((prev) => ({ ...prev, [name]: false }));
+        if (secretKeys.has(name) && String(raw ?? '').trim()) {
+          setConfiguredSecrets((prev) => ({...prev, [name]: true}));
+          setItems((prev) => ({...prev, [name]: {configured: true}}));
+        }
         // 若保存影响 bootstrap 返回值（站点标题、邮件开关、验证码、注册策略）
         refreshBootstrap();
       } else {
@@ -215,7 +222,7 @@ export default function AdminSystemPage() {
   const renderBool = (name: string, label: string, help?: string) => {
     const val = toBool(items[name]);
     return (
-      <Row align="middle" gutter={12} style={{ marginBottom: 12 }}>
+      <Row className={styles.settingRow} data-setting={name} align="middle" gutter={12} style={{ marginBottom: 12 }}>
         <Col flex="220px">
           <Space>
             <span>{label}</span>
@@ -250,22 +257,15 @@ export default function AdminSystemPage() {
     opts?: { help?: string; placeholder?: string; textarea?: boolean },
   ) => {
     const isSecret = secretKeys.has(name);
-    const configured =
-      isSecret && typeof items[name] === 'object'
-        ? !!items[name]?.configured
-        : undefined;
-    const val = isSecret ? '' : (items[name] ?? '');
+    const configured = configuredSecrets[name] ?? false;
+    const val = isSecret ? dirty[name] && typeof items[name] === 'string' ? items[name] : '' : (items[name] ?? '');
+    const placeholder = isSecret ? configured ? '已配置，留空保留现有值' : '未配置，请填写'
+      : opts?.placeholder || '未配置';
     return (
-      <Row align="top" gutter={12} style={{ marginBottom: 12 }}>
+      <Row className={styles.settingRow} data-setting={name} align="top" gutter={12} style={{ marginBottom: 12 }}>
         <Col flex="220px">
           <Space>
-            <span>{label}</span>
-            {isSecret &&
-              (configured ? (
-                <Tag color="green">已配置</Tag>
-              ) : (
-                <Tag>未配置</Tag>
-              ))}
+            <label htmlFor={`setting-${name}`}>{label}</label>
             {dirty[name] && <Tag color="gold">未保存</Tag>}
           </Space>
           {opts?.help && (
@@ -275,24 +275,25 @@ export default function AdminSystemPage() {
         <Col flex="auto">
           {opts?.textarea ? (
             <Input.TextArea
+              id={`setting-${name}`}
               rows={3}
               value={val}
-              placeholder={
-                isSecret ? '（保持为空表示不修改）' : opts?.placeholder
-              }
+              placeholder={placeholder}
               onChange={(e) => markDirty(name, e.target.value)}
             />
           ) : isSecret ? (
             <Input.Password
+              id={`setting-${name}`}
               value={val}
-              placeholder="（保持为空表示不修改）"
+              placeholder={placeholder}
               onChange={(e) => markDirty(name, e.target.value)}
               autoComplete="off"
             />
           ) : (
             <Input
+              id={`setting-${name}`}
               value={val}
-              placeholder={opts?.placeholder}
+              placeholder={placeholder}
               onChange={(e) => markDirty(name, e.target.value)}
               autoComplete="off"
             />
@@ -318,7 +319,7 @@ export default function AdminSystemPage() {
   ) => {
     const val = Number(items[name] ?? 0);
     return (
-      <Row align="middle" gutter={12} style={{ marginBottom: 12 }}>
+      <Row className={styles.settingRow} data-setting={name} align="middle" gutter={12} style={{ marginBottom: 12 }}>
         <Col flex="220px">
           <Space>
             <span>{label}</span>
@@ -358,7 +359,7 @@ export default function AdminSystemPage() {
   ) => {
     const val = String(items[name] ?? '');
     return (
-      <Row align="middle" gutter={12} style={{ marginBottom: 12 }}>
+      <Row className={styles.settingRow} data-setting={name} align="middle" gutter={12} style={{ marginBottom: 12 }}>
         <Col flex="220px">
           <Space>
             <span>{label}</span>
@@ -460,7 +461,7 @@ export default function AdminSystemPage() {
   );
 
   return (
-    <div style={{ padding: 24, maxWidth: 1080, margin: '0 auto' }}>
+    <div className={styles.page}>
       <Space style={{ marginBottom: 16 }}>
         <Typography.Title level={4} style={{ margin: 0 }}>
           系统管理
@@ -482,7 +483,7 @@ export default function AdminSystemPage() {
 
       {/* 邮件 =================================================== */}
       <Card title="邮件" style={{ marginBottom: 16 }}>
-        <Row align="middle" gutter={12} style={{ marginBottom: 12 }}>
+        <Row className={styles.settingRow} align="middle" gutter={12} style={{ marginBottom: 12 }}>
           <Col flex="220px">
             <Space>
               <span>启用邮箱功能</span>
@@ -621,13 +622,13 @@ export default function AdminSystemPage() {
           message="建议使用专用子域名（如 dcv.example.com）"
           description="启用时会先在该子域名下写入并清理一条测试 TXT 记录，确认 Token 具备权限后才保存，不会影响其他记录。"
         />
-        <Row align="middle" gutter={12} style={{ marginBottom: 12 }}>
+        <Row className={styles.dialogRow} align="middle" gutter={12} style={{ marginBottom: 12 }}>
           <Col flex="120px">托管域名</Col>
           <Col flex="auto">
             <Input value={dcvDomain} onChange={(e) => setDcvDomain(e.target.value)} placeholder="dcv.example.com" maxLength={253} />
           </Col>
         </Row>
-        <Row align="middle" gutter={12} style={{ marginBottom: 12 }}>
+        <Row className={styles.dialogRow} align="middle" gutter={12} style={{ marginBottom: 12 }}>
           <Col flex="120px">
             API Token
             <Tooltip title="Cloudflare 控制台 → 我的个人资料 → API 令牌 → 创建令牌 → 选择「编辑区域 DNS」模板；权限需包含 Zone Read（读取区域）与 DNS Edit（编辑 DNS）；资源限制到该子域名所在的区域。页面只显示一次 Token，请及时复制。">

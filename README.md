@@ -305,6 +305,18 @@ curl "https://<你的域名>/cron?token=<令牌>"
 
 云证书与本站申请的关联保存在订单目标状态中，证书签发、上传、绑定和异步更新任务分别处理。失败不会把签发结果改成失败。旧全局边缘下发不再执行；所有部署必须来自订单选择的目标。
 
+新增云部署目标时，选择与实际账号一致的“中国站”或“国际站”，不要混用密钥与站点 ID。旧目标默认中国站；切换站点会清空表单中的站点、域名和云证书 ID，并要求填写新站点凭据，避免继续复用另一站的资源。
+
+| 服务 | 中国站 API | 国际站 API |
+| --- | --- | --- |
+| 阿里云 ESA | `esa.cn-hangzhou.aliyuncs.com`（杭州） | `esa.ap-southeast-1.aliyuncs.com`（新加坡） |
+| 腾讯 EdgeOne | `teo.tencentcloudapi.com` | `teo.intl.tencentcloudapi.com` |
+| 腾讯 SSL | `ssl.tencentcloudapi.com` | `ssl.tencentcloudapi.com`（官方共用地址） |
+
+部署失败或连接检查失败后，悬停、聚焦或点击错误说明可查看请求方法、实际 API 地址、动作、HTTP 状态与响应 Body。签名授权、Token、密钥和证书私钥会隐藏，过长响应会截断，HTML 响应只按文字显示。旧版本保存的错误没有完整请求记录，需要重新检查或重新部署后生成详细诊断，不能追溯补造历史 Body。
+
+官方参考：[ESA 服务接入点](https://help.aliyun.com/zh/edge-security-acceleration/esa/api-esa-2024-09-10-endpoint)、[EdgeOne 国际站请求结构](https://intl.cloud.tencent.com/document/product/1145/50456)、[国际站 SSL 上传 API](https://edgeone.ai/document/36579)。
+
 | 平台 | 调用链 | 所需权限 |
 | --- | --- | --- |
 | 腾讯云 EdgeOne | 上传至 SSL 控制台，可选绑定；续期检查旧资源关联更新结果 | `ssl:UploadCertificate`、`ssl:UpdateCertificateInstance`、`ssl:DescribeHostUpdateRecordDetail`；绑定模式额外需要 `teo:DescribeZones`、`teo:DescribeAccelerationDomains`、`teo:DescribeHostsSetting`、`teo:ModifyHostsCertificate` |

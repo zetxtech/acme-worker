@@ -1,11 +1,12 @@
 import {publicHttps} from "./network";
 import {remotePath, validateSshConfig} from "./ssh";
+import {cloudMarket} from '../edge/endpoints';
 
 export function validateResourceConfig(provider: string, config: Record<string, any>, secrets: Record<string, string>): void {
     const fields: Record<string, string[]> = {
         cloudflare: [], dnspod: [], alidns: [], https: ["url", "method", "timeout"],
         ssh: ["host", "port", "username", "fingerprint", "timeout", "format", "certificatePath", "privateKeyPath", "pfxPath", "privateKeyMode", "testCommand", "reloadCommand"],
-        edgeone: ["zone_id", "hosts", "region", "alias", "mode", "certificate_id"], esa: ["site_id", "cert_name", "certificate_id"],
+        edgeone: ["zone_id", "hosts", "region", "alias", "mode", "certificate_id", "market"], esa: ["site_id", "cert_name", "certificate_id", "market"],
     };
     fields.nginx = fields.ssh;
     fields.traefik = [...fields.ssh, "traefikMode", "dynamicPath", "acmePath", "resolver", "externalWriterStopped"];
@@ -21,6 +22,7 @@ export function validateResourceConfig(provider: string, config: Record<string, 
     const required = provider === "cloudflare" ? ["token"] : ["dnspod", "edgeone"].includes(provider)
         ? ["secretId", "secretKey"] : ["alidns", "esa"].includes(provider) ? ["accessKeyId", "accessKeySecret"] : [];
     if (required.some((field) => !secrets[field]?.trim())) throw new Error("Provider credentials are required");
+    if (['edgeone', 'esa'].includes(provider)) cloudMarket(config.market);
     if (provider === "https") {
         publicHttps(config.url);
         if (config.method && !["POST", "PUT"].includes(config.method)) throw new Error("Invalid hook method");

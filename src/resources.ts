@@ -2,6 +2,7 @@ import type {Dao} from "./db/dao";
 import {requestedNames} from "./capabilities";
 import {validateResourceConfig} from "./deploy/config";
 import {dnsDefinition, dnsShard, validateDnsSettings, verifiedDnsAccount} from "./lego/registry";
+import {cloudMarket} from './edge/endpoints';
 
 export type ResourceKind = "DNS_ACCOUNT" | "DEPLOY_TARGET";
 export interface Resource {
@@ -123,6 +124,8 @@ export async function saveResource(dao: Dao, secret: string | undefined, kind: R
         throw new Error("Invalid resource configuration");
     }
     const identity = `${kind}:${id}`;
+    if (existing && ['esa', 'edgeone'].includes(provider) && cloudMarket(existing.config.market) !== cloudMarket(config.market)
+        && body.clearSecrets !== true) throw new Error('更换账号站点时请填写新站点凭据');
     const credentials = existing && body.clearSecrets !== true ? await unseal(secret, identity, existing.encrypted) : {};
     for (const [field, value] of Object.entries(body.secrets ?? {})) {
         if (typeof value !== "string" || value.length > 32000 || field.length > 80) throw new Error("Invalid credentials");

@@ -12,6 +12,9 @@
  * Reference: https://cloud.tencent.com/document/api/1552/80724
  */
 
+import {tencentEndpoint, type CloudMarket} from './endpoints';
+import {CloudHttpError} from './http-error';
+
 const encoder = new TextEncoder();
 
 /** Uint8Array -> 小写十六进制 */
@@ -45,6 +48,7 @@ export function randomHex(bytes: number = 16): string {
 }
 
 export interface TcCredentials {
+    market?: CloudMarket;
     secretId: string;
     secretKey: string;
     region?: string;
@@ -115,26 +119,36 @@ export async function tcCall(
     if (region) headers["X-TC-Region"] = region;
 
     // host 已参与签名计算，但由 fetch 依据 URL 自动生成，不能手动设置
-    const resp = await fetch(`https://${opt.host}/`, {
+    const url = `https://${opt.host}/`;
+    let resp: Response;
+    try { resp = await fetch(url, {
         method: "POST",
         headers,
         body: payload,
         signal: AbortSignal.timeout(opt.timeout ?? 20000),
-    });
+        redirect: 'manual',
+    }); } catch (error) {
+        throw new CloudHttpError('腾讯云请求未完成，请检查账号站点和连接', {url, action: opt.action, parameters: opt.params},
+            {status: 0, statusText: 'Network error', body: (error as Error).message}, [cred.secretId, cred.secretKey]);
+    }
     const text = await resp.text();
     let data: any = null;
     try {
         data = JSON.parse(text);
     } catch {
-        throw new Error(`腾讯云返回非 JSON (HTTP ${resp.status}): ${text.slice(0, 300)}`);
+        const code = text.match(/error code:\s*(\d+)/i)?.[1];
+        throw new CloudHttpError(`腾讯云返回非 JSON (HTTP ${resp.status})${code ? `: error code: ${code}` : ''}`, {url, action: opt.action, parameters: opt.params},
+            {status: resp.status, statusText: resp.statusText, body: text, requestId: resp.headers.get('cf-ray') || undefined}, [cred.secretId, cred.secretKey]);
     }
     const body = data?.Response ?? data;
     const err = body?.Error;
     if (err) {
-        throw new Error(`腾讯云 ${opt.action} 失败: ${err.Code ?? ""} ${err.Message ?? ""}`.trim());
+        throw new CloudHttpError(`腾讯云 ${opt.action} 失败: ${err.Code ?? ""} ${err.Message ?? ""}`.trim(), {url, action: opt.action, parameters: opt.params},
+            {status: resp.status, statusText: resp.statusText, body: text, requestId: body?.RequestId}, [cred.secretId, cred.secretKey]);
     }
     if (!resp.ok) {
-        throw new Error(`腾讯云 ${opt.action} HTTP ${resp.status}: ${text.slice(0, 300)}`);
+        throw new CloudHttpError(`腾讯云 ${opt.action} HTTP ${resp.status}`, {url, action: opt.action, parameters: opt.params},
+            {status: resp.status, statusText: resp.statusText, body: text}, [cred.secretId, cred.secretKey]);
     }
     return body ?? {};
 }
@@ -144,7 +158,7 @@ export function teoCall(
     cred: TcCredentials, action: string, params?: Record<string, any>, timeout?: number,
 ): Promise<Record<string, any>> {
     return tcCall(cred, {
-        service: "teo", host: "teo.tencentcloudapi.com", version: "2022-09-01",
+        service: "teo", host: tencentEndpoint('teo', cred.market), version: "2022-09-01",
         action, params, timeout,
     });
 }
@@ -154,7 +168,7 @@ export function sslCall(
     cred: TcCredentials, action: string, params?: Record<string, any>, timeout?: number,
 ): Promise<Record<string, any>> {
     return tcCall(cred, {
-        service: "ssl", host: "ssl.tencentcloudapi.com", version: "2019-12-05",
+        service: "ssl", host: tencentEndpoint('ssl', cred.market), version: "2019-12-05",
         action, params, timeout,
     });
 }

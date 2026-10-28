@@ -77,6 +77,28 @@
   box-shadow: 0 0 0 3px var(--brand-soft) !important;
 }
 
+.ant-input-affix-wrapper > input.ant-input,
+.ant-input-affix-wrapper > input.ant-input:hover,
+.ant-input-affix-wrapper > input.ant-input:focus,
+.ant-select .ant-select-selection-search-input,
+.ant-input-number .ant-input-number-input {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+  border-radius: 0 !important;
+}
+
+.ant-input-affix-wrapper > input.ant-input {
+  padding: 0 !important;
+  min-width: 0;
+}
+
+.toolbarRow .ant-input-affix-wrapper > input.ant-input {
+  height: auto !important;
+  box-shadow: none !important;
+}
+
 /* ---------- Select ---------- */
 .ant-select .ant-select-selector {
   background: var(--bg-panel) !important;

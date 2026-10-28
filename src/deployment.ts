@@ -8,6 +8,8 @@ import {deployHook} from "./deploy/hook";
 import {deploySsh} from "./deploy/ssh";
 import {validateResourceConfig} from "./deploy/config";
 import {X509Certificate} from 'node:crypto';
+import {cloudMarket} from './edge/endpoints';
+import {httpDiagnostic, redactCloudText, type HttpDiagnostic} from './edge/http-error';
 
 export interface DeploymentState {
     targetId: string;
@@ -20,6 +22,7 @@ export interface DeploymentState {
     updatedAt: number;
     nextAttempt: number;
     detail: string;
+    diagnostic?: HttpDiagnostic;
 }
 
 export function certificateCoversHost(pattern: string, host: string): boolean {
@@ -47,8 +50,10 @@ async function execute(env: Bindings, target: Resource, secrets: Record<string, 
     const family = certificate.publicKey.asymmetricKeyType;
     if (!['rsa', 'ec'].includes(family ?? '') || certificate.publicKey.asymmetricKeyDetails?.namedCurve === 'SM2') throw new Error('该云部署仅支持 RSA 或 ECC 证书');
     const dao = await ensureDao(env);
-    const remoteKey = `CLOUD_CERT:${order.uuid}:${target.id}:${family}`;
-    const stored = JSON.parse(await dao.getConf(remoteKey) ?? 'null');
+    const market = cloudMarket(target.config.market);
+    const legacyKey = `CLOUD_CERT:${order.uuid}:${target.id}:${family}`;
+    const remoteKey = `${legacyKey}:${market}`;
+    const stored = JSON.parse((await dao.getConf(remoteKey) || (market === 'mainland' ? await dao.getConf(legacyKey) : null)) ?? 'null');
     const state: any = stored?.version === version ? stored : {version, previousId: stored?.id || target.config.certificate_id, startedAt: Date.now()};
     if (state.taskId && Date.now() - state.startedAt > 20 * 60000) throw new Error('云平台证书关联更新超时，请检查更新记录后重试');
     const persist = async () => dao.upsertConf(remoteKey, JSON.stringify(state), Date.now());
@@ -123,9 +128,8 @@ export async function pushSelectedOrder(env: Bindings, order: any, options: {tar
                 if (cloud?.pending) state.attempts = previous?.attempts ?? 0;
             } catch (error) {
                 state.status = "fail";
-                let detail = (error as Error).message;
-                for (const value of Object.values(secrets)) if (value) detail = detail.split(value).join("[redacted]");
-                state.detail = detail.slice(0, 500);
+                state.detail = redactCloudText((error as Error).message, Object.values(secrets)).slice(0, 500);
+                state.diagnostic = httpDiagnostic(error, [...Object.values(secrets), String(order.keys)]);
             }
         } catch { state.status = "fail"; state.detail = "Credential decryption or deployment initialization failed"; }
         finally {

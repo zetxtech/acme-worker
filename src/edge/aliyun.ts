@@ -13,6 +13,8 @@
  */
 
 import {hmacSha256, randomHex, sha256Hex} from "./tencent";
+import {esaEndpoint, type CloudMarket} from './endpoints';
+import {CloudHttpError} from './http-error';
 
 const encoder = new TextEncoder();
 
@@ -56,6 +58,7 @@ export function canonicalQueryString(params: Record<string, any>): string {
 }
 
 export interface AliCredentials {
+    market?: CloudMarket;
     accessKeyId: string;
     accessKeySecret: string;
     /** 接口域名，默认 esa.aliyuncs.com */
@@ -88,7 +91,7 @@ export async function esaCall(
     if (!cred.accessKeyId || !cred.accessKeySecret) {
         throw new Error("阿里云 AccessKeyId / AccessKeySecret 未配置");
     }
-    const host = cred.endpoint || "esa.aliyuncs.com";
+    const host = esaEndpoint(cred.market, cred.endpoint);
     const query = canonicalQueryString(opt.params ?? {});
     const hashedPayload = await sha256Hex("");
 
@@ -129,21 +132,29 @@ export async function esaCall(
         "x-acs-content-sha256": headers["x-acs-content-sha256"],
         "Authorization": authorization,
     };
-    const resp = await fetch(url, {
+    let resp: Response;
+    try { resp = await fetch(url, {
         method: "POST",
         headers: requestHeaders,
         signal: AbortSignal.timeout(opt.timeout ?? 20000),
-    });
+        redirect: 'manual',
+    }); } catch (error) {
+        throw new CloudHttpError('阿里云请求未完成，请检查账号站点和连接', {url, action: opt.action, parameters: opt.params},
+            {status: 0, statusText: 'Network error', body: (error as Error).message}, [cred.accessKeyId, cred.accessKeySecret]);
+    }
     const text = await resp.text();
     let data: any = null;
     try {
         data = JSON.parse(text);
     } catch {
-        throw new Error(`阿里云返回非 JSON (HTTP ${resp.status}): ${text.slice(0, 300)}`);
+        const code = text.match(/error code:\s*(\d+)/i)?.[1];
+        throw new CloudHttpError(`阿里云返回非 JSON (HTTP ${resp.status})${code ? `: error code: ${code}` : ''}`, {url, action: opt.action, parameters: opt.params},
+            {status: resp.status, statusText: resp.statusText, body: text, requestId: resp.headers.get('cf-ray') || undefined}, [cred.accessKeyId, cred.accessKeySecret]);
     }
     if (!resp.ok || (data?.Code && data.Code !== "200")) {
-        throw new Error(
-            `阿里云 ${opt.action} 失败: ${data?.Code ?? resp.status} ${data?.Message ?? ""}`.trim());
+        throw new CloudHttpError(`阿里云 ${opt.action} 失败: ${data?.Code ?? resp.status} ${data?.Message ?? ""}`.trim(),
+            {url, action: opt.action, parameters: opt.params}, {status: resp.status, statusText: resp.statusText, body: text, requestId: data?.RequestId},
+            [cred.accessKeyId, cred.accessKeySecret]);
     }
     return data ?? {};
 }

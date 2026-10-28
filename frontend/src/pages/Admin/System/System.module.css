@@ -1,0 +1,47 @@
+.page {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.settingRow {
+  display: grid;
+  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  margin-inline: 0 !important;
+  padding-block: 6px;
+}
+
+.settingRow > :global(.ant-col),
+.dialogRow > :global(.ant-col) {
+  min-width: 0;
+  max-width: none;
+  padding-inline: 0 !important;
+}
+
+.settingRow :global(.ant-input-number) {
+  width: 100% !important;
+}
+
+.settingRow :global(.ant-radio-group) {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.dialogRow {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 12px;
+  margin-inline: 0 !important;
+}
+
+@media (max-width: 700px) {
+  .page { padding: 16px; }
+  .settingRow { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .settingRow > :first-child { grid-column: 1 / -1; }
+  .dialogRow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .page :global(.ant-card-head-wrapper) { flex-wrap: wrap; gap: 8px; }
+  .page :global(.ant-card-extra) { margin-inline-start: 0; }
+}

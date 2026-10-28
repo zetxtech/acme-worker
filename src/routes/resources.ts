@@ -14,6 +14,7 @@ import {dnsCatalog, dnsVerificationMatches} from "../lego/registry";
 import shardBuilds from "../lego-shards.generated.json";
 import {dcvCapability, requestedNames} from "../capabilities";
 import {queueOrder} from "../order-workflow";
+import {httpDiagnostic} from '../edge/http-error';
 
 export function mountResourceRoutes(app: Hono<{Bindings: Bindings}>) {
     app.use("/resources/*", async (c, next) => {
@@ -160,7 +161,10 @@ export function mountResourceRoutes(app: Hono<{Bindings: Bindings}>) {
                     esa: {...resource.config, access_key_id: secrets.accessKeyId, access_key_secret: secrets.accessKeySecret}} as any);
             }
             return c.json({flags: 0, texts: "Connection verified; no certificate deployed"});
-        } catch { return c.json({flags: 3, texts: "Connection test failed; check host fingerprint, credentials and public reachability"}, 400); }
+        } catch (error) {
+            const diagnostic = httpDiagnostic(error);
+            return c.json({flags: 3, texts: diagnostic ? (error as Error).message : '连接检查失败，请检查主机指纹、凭据和网络', diagnostic}, 400);
+        }
     });
     app.get("/resources/orders/:uuid/deployments", async (c) => {
         const user = c.get("resourceUser" as never) as any;

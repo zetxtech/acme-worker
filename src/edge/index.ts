@@ -21,10 +21,12 @@ import type {Bindings} from "../index";
 import {readConf, writeConf} from "../db/conf";
 import {esaCall} from "./aliyun";
 import {sha256Hex, sslCall, teoCall} from "./tencent";
+import type {CloudMarket} from './endpoints';
 
 export type EdgeTargetType = "edgeone" | "esa";
 
 export interface EdgeOneConfig {
+    market?: CloudMarket;
     mode?: 'upload' | 'bind';
     certificate_id?: string;
     /** 腾讯云 SecretId */
@@ -42,6 +44,7 @@ export interface EdgeOneConfig {
 }
 
 export interface EsaConfig {
+    market?: CloudMarket;
     certificate_id?: string;
     /** 阿里云 AccessKeyId */
     access_key_id: string;
@@ -246,7 +249,7 @@ async function deployEdgeOne(
     env: Bindings, target: EdgeTarget, ctx: DeployContext, hash: string,
 ): Promise<{certId?: string; hosts: string[]; detail: string; pending?: boolean}> {
     const cfg = target.edgeone ?? {secret_id: "", secret_key: ""};
-    const cred = {secretId: cfg.secret_id, secretKey: cfg.secret_key, region: cfg.region};
+    const cred = {secretId: cfg.secret_id, secretKey: cfg.secret_key, region: cfg.region, market: cfg.market};
 
     let certId = ctx.uploadedCertificateId;
     if (!certId) {
@@ -344,6 +347,7 @@ async function deployEsa(
 ): Promise<{certId?: string; hosts: string[]; detail: string}> {
     const cfg = target.esa ?? {access_key_id: "", access_key_secret: ""};
     const cred = {
+        market: cfg.market,
         accessKeyId: cfg.access_key_id,
         accessKeySecret: cfg.access_key_secret,
         endpoint: cfg.endpoint,
@@ -549,7 +553,7 @@ export async function testTarget(target: EdgeTarget): Promise<string> {
     if (target.type === "edgeone") {
         const cfg = target.edgeone ?? {secret_id: "", secret_key: ""};
         const res = await teoCall(
-            {secretId: cfg.secret_id, secretKey: cfg.secret_key, region: cfg.region},
+            {secretId: cfg.secret_id, secretKey: cfg.secret_key, region: cfg.region, market: cfg.market},
             "DescribeZones", {Offset: 0, Limit: 20});
         const zones: any[] = Array.isArray(res?.Zones) ? res.Zones : [];
         return `连接成功，可见站点 ${zones.length} 个` +
@@ -561,6 +565,7 @@ export async function testTarget(target: EdgeTarget): Promise<string> {
             {
                 accessKeyId: cfg.access_key_id,
                 accessKeySecret: cfg.access_key_secret,
+                market: cfg.market,
                 endpoint: cfg.endpoint,
             },
             {action: "ListSites", version: "2024-09-10", params: {PageNumber: 1, PageSize: 20}});

@@ -3,6 +3,7 @@ import {App, Button, Modal, Select, Space, Table, Tag, Tooltip} from 'antd';
 import {RefreshCw, Settings2} from 'lucide-react';
 import {fetchDeployments, fetchResources, resourceSelectable, retryDeployment, updateDeploymentSelection, type DeploymentState, type WorkflowResource} from '@api/resources';
 import type {Order} from '@api/types';
+import RequestDetails from '@components/molecules/RequestDetails';
 
 export default function Deployments({order}: {order: Order}) {
   const {message} = App.useApp();
@@ -47,7 +48,8 @@ export default function Deployments({order}: {order: Order}) {
     {items.length ? <Table rowKey="targetId" size="small" dataSource={items} loading={loading} pagination={false} scroll={{x: 640}} columns={[
       {title: '\u76ee\u6807', dataIndex: 'name'}, {title: '\u72b6\u6001', dataIndex: 'status', render: (status: DeploymentState['status']) => <Tag color={status === 'ok' ? 'green' : status === 'fail' ? 'red' : 'default'}>{labels[status]}</Tag>},
       {title: '\u7248\u672c', dataIndex: 'version', render: (version?: string) => version?.slice(0, 10) ?? '-'},
-      {title: '\u5c1d\u8bd5', dataIndex: 'attempts'}, {title: '\u8be6\u60c5', dataIndex: 'detail', width: 260, render: (detail?: string) => <span style={{overflowWrap: 'anywhere'}}>{detail || '-'}</span>},
+      {title: '\u5c1d\u8bd5', dataIndex: 'attempts'}, {title: '\u8be6\u60c5', dataIndex: 'detail', width: 260,
+        render: (detail: string | undefined, item) => <RequestDetails summary={detail} diagnostic={item.diagnostic}/>},
       {title: '\u64cd\u4f5c', key: 'retry', render: (_, item) => <Tooltip title={'\u91cd\u8bd5\u6b64\u76ee\u6807'}><span><Button aria-label={'\u91cd\u8bd5\u6b64\u76ee\u6807'} icon={<RefreshCw size={14}/>}
         disabled={order.flag !== 5 || item.status !== 'fail'} loading={retrying === item.targetId} onClick={() => retry(item.targetId).catch(() => {})}/></span></Tooltip>},
       ]}/> : <p style={{color: 'var(--text-2)', margin: 0}}>未设置自动部署，签发后可下载证书。</p>}

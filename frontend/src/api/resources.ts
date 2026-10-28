@@ -55,6 +55,18 @@ export interface DeploymentState {
   version?: string;
   updatedAt?: number;
   detail?: string;
+  diagnostic?: HttpDiagnostic;
+}
+
+export interface HttpDiagnostic {
+  method: string;
+  url: string;
+  action: string;
+  status: number;
+  statusText: string;
+  responseBody: string;
+  requestId?: string;
+  truncated?: boolean;
 }
 
 export function resourceSelectable(resource: WorkflowResource, mail: string | null, domains: string[] = []) {
@@ -94,7 +106,8 @@ export async function saveResource(kind: string, values: any, id?: string) {
 }
 export const deleteResource = (kind: string, id: string) => http.delete(`/resources/${kind}/${id}`);
 export async function testResource(kind: string, id: string, domain?: string, confirmWrite = false) {
-  const response = await http.post(`/resources/${kind}/${id}/test`, {domain, confirmWrite}, {timeout: 160000});
+  const config = {timeout: 160000, silent: true};
+  const response = await http.post(`/resources/${kind}/${id}/test`, {domain, confirmWrite}, config);
   return resourceResult(response.data);
 }
 export const fetchDeployments = (uuid: string) => apiGet<{flags: number; items: DeploymentState[]}>(`/resources/orders/${uuid}/deployments`);

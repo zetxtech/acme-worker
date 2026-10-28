@@ -14,7 +14,9 @@ import {canUse, inScope, maskedResource, seal, unseal, validateSelections, saveR
 import {delegationTarget, DnsProvider, txtPropagated} from "../src/dns";
 import {dnsAuthy} from "../src/certs";
 import {registeredClient, resolveAccountKey} from "../src/routes/admin_certs_helper";
-import {sha256Hex} from "../src/edge/tencent";
+import {sha256Hex, teoCall, sslCall} from "../src/edge/tencent";
+import {esaCall} from '../src/edge/aliyun';
+import {CloudHttpError} from '../src/edge/http-error';
 import {boundedResponse, publicHost, publicHttps} from "../src/deploy/network";
 import {deployHook} from "../src/deploy/hook";
 import {hostFingerprintMatches, mergeTraefikAcme, remotePath, replaceRemoteFiles, validateSshConfig} from "../src/deploy/ssh";
@@ -756,6 +758,60 @@ test('ESA updates the saved certificate ID and EdgeOne separates upload, link mi
     } finally { globalThis.fetch = original; }
 });
 
+test('cloud errors retain safe POST endpoint and response body without leaking signing credentials', async () => {
+    const original = globalThis.fetch;
+    const secret = 'fixture-secret-keep-private';
+    const privateKey = '-----BEGIN PRIVATE KEY-----\nfixture-private-key\n-----END PRIVATE KEY-----';
+    let destination = '';
+    globalThis.fetch = (async (url: any) => {
+        destination = String(url);
+        return new Response(`error code: 1016\nsecret=${secret}\n${privateKey}`, {status: 530, statusText: 'Origin DNS error'});
+    }) as any;
+    try {
+        await assert.rejects(esaCall({accessKeyId: 'fixture-id', accessKeySecret: secret}, {
+            action: 'SetCertificate', version: '2024-09-10', params: {SiteId: '123', Type: 'upload', PrivateKey: privateKey},
+        }), (error: any) => {
+            assert.equal(error.diagnostic?.method, 'POST');
+            assert.equal(new URL(error.diagnostic.url).hostname, 'esa.cn-hangzhou.aliyuncs.com');
+            assert.equal(error.diagnostic.action, 'SetCertificate');
+            assert.equal(error.diagnostic.status, 530);
+            assert.match(error.diagnostic.responseBody, /error code: 1016/);
+            assert.equal(JSON.stringify(error).includes(secret), false);
+            assert.equal(JSON.stringify(error).includes('fixture-private-key'), false);
+            return true;
+        });
+        assert.equal(new URL(destination).hostname, 'esa.cn-hangzhou.aliyuncs.com');
+    } finally { globalThis.fetch = original; }
+});
+
+test('safe cloud diagnostics survive deployment persistence with response truncation and redaction', async () => {
+    const key = Buffer.alloc(32, 11).toString('base64');
+    const secret = 'fixture-persisted-token';
+    const storage = new Map<string, string>();
+    storage.set('ORDER_DEPLOYMENT:diagnostic', '["one"]');
+    storage.set('DEPLOY_TARGET:one', JSON.stringify({id: 'one', name: 'target', kind: 'DEPLOY_TARGET', provider: 'https',
+        owner: 'owner@example.com', enabled: true, zones: ['example.com'], grants: [], updatedAt: 1, config: {url: 'https://receiver.example.com'},
+        encrypted: await seal(key, 'DEPLOY_TARGET:one', {authToken: secret})}));
+    const dao: any = {getConf: async (name: string) => storage.get(name) ?? null,
+        upsertConf: async (name: string, value: string) => { storage.set(name, value); },
+        claimConfLease: async () => true, releaseConfLease: async () => {}};
+    const states = await pushSelectedOrder({AUTOMATION_KEY: key} as any, {uuid: 'diagnostic', mail: 'owner@example.com',
+        flag: 5, cert: 'synthetic-certificate', keys: 'fixture-private-key', list: '[{"name":"example.com"}]'}, {}, dao, async () => {
+        throw new CloudHttpError('HTTP 530', {url: 'https://esa.cn-hangzhou.aliyuncs.com/?PrivateKey=fixture-private-key', action: 'SetCertificate'},
+            {status: 530, statusText: 'DNS error', body: JSON.stringify({message: 'error code: 1016', AccessToken: secret, SecretKey: 'unknown-response-secret',
+                body: 'x'.repeat(20000)})}, [secret]);
+    });
+    assert.equal(states[0].status, 'fail');
+    assert.equal(states[0].diagnostic!.method, 'POST');
+    assert.match(states[0].diagnostic!.responseBody, /1016/);
+    assert.equal(states[0].diagnostic!.truncated, true);
+    assert.ok(states[0].diagnostic!.responseBody.length <= 8192);
+    const persisted = storage.get('DEPLOY_STATE:diagnostic:one')!;
+    assert.equal(persisted.includes(secret), false);
+    assert.equal(persisted.includes('unknown-response-secret'), false);
+    assert.equal(persisted.includes('fixture-private-key'), false);
+});
+
 test('fixed cron remains automatic despite removed legacy switches and preserves the existing credential', async () => {
     _resetDaoForTests(); invalidateAll();
     const database = memoryD1();
@@ -1009,15 +1065,19 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         owner: "fixture@example.org", grants: [], zones: ["example.com"], enabled: true, config: {}, credentialsConfigured: true});
     const resources: Record<string, any[]> = {dns: [resource("dns-one", "Example DNS", "cloudflare")],
         targets: [resource("hook-one", "Certificate receiver", "https"), resource("nginx-one", "Public Nginx", "nginx")]};
-    let deployments = [{targetId: "hook-one", name: "Certificate receiver", status: "ok", attempts: 1, version: "fixture-version", detail: "Certificate deployed"},
-        {targetId: "nginx-one", name: "Public Nginx", status: "fail", attempts: 1, version: "fixture-version", detail: "Connection timeout"}];
+    let deployments = [{targetId: "hook-one", name: "Certificate receiver", status: "ok", attempts: 1, version: "fixture-version", detail: "Certificate deployed", diagnostic: undefined as any},
+        {targetId: "nginx-one", name: "Public Nginx", status: "fail", attempts: 1, version: "fixture-version", detail: "阿里云返回非 JSON (HTTP 530): error code: 1016",
+            diagnostic: {method: 'POST', url: 'https://esa.cn-hangzhou.aliyuncs.com/?SiteId=123', action: 'SetCertificate', status: 530,
+                statusText: 'Origin DNS error', responseBody: 'error code: 1016\n[redacted]'}}];
     await page.route("**/bootstrap", (route) => route.fulfill({json: {initialized: true, site_title: "CertHub Local Acceptance", db_source: "d1", db_ok: true,
         mail_enabled: false, register_allow: false, cert_captcha: {enabled: false}, base_captcha: {enabled: false}}}));
     await page.route("**/check/", (route) => route.fulfill({json: {flags: 0, texts: "fixture@example.org", is_admin: admin ? 1 : 0, quota: -1}}));
     await page.route("**/apply/quota", (route) => route.fulfill({json: {flags: 0, monthly_limit: 0, month_used: 0, quota: -1, active_certs: 0}}));
     await page.route("**/account/apitoken*", (route) => route.fulfill({json: {flags: 0, configured: false, fingerprint: "", mail: "fixture@example.org"}}));
     await page.route("**/admin/users*", (route) => route.fulfill({json: {flags: 0, items: [], total: 0, page: 1, page_size: 20}}));
-    await page.route("**/admin/confs*", (route) => route.fulfill({json: {flags: 0, items: {}, secret_keys: []}}));
+    await page.route("**/admin/confs*", (route) => route.fulfill({json: {flags: 0,
+        items: {GTS_KeyTS: {configured: false}, SSL_KeyTS: {configured: true}, ZRO_KeyTS: {configured: false}},
+        secret_keys: ['GTS_KeyTS', 'SSL_KeyTS', 'ZRO_KeyTS']}}));
     await page.route('**/admin/automation', (route) => route.fulfill({json: {flags: 0, endpoint: {url: `${base}/cron?token=fixture-only`}, log: []}}));
     await page.route('**/orders/fixture-order', (route) => {
         calls.push({path: '/orders/fixture-order', method: route.request().method(), body: route.request().postDataJSON()});
@@ -1113,7 +1173,7 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.goto(`${base}/#/panel`);
         await page.getByText("welcome back", {exact: false}).waitFor({state: "visible"});
         await page.screenshot({path: directory + "desktop-panel-ux.png", fullPage: true});
-        const sidebar = await page.locator("aside").first().elementHandle();
+        let sidebar = await page.locator("aside").first().elementHandle();
         assert.ok(sidebar);
         const assertShell = async () => {
             assert.equal(await sidebar.evaluate((element) => element.isConnected && element === document.querySelector("aside")), true);
@@ -1185,6 +1245,20 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await navigate("/admin/system");
         await page.getByText("DCV \u6258\u7ba1\uff08Cloudflare DNS \u4ee3\u7406\uff09", {exact: true}).waitFor();
         await page.getByText("\u672a\u542f\u7528\uff1a\u7533\u8bf7\u9875\u7684\u300cDCV \u6258\u7ba1\u300d\u9a8c\u8bc1\u65b9\u5f0f\u4e0d\u53ef\u9009", {exact: true}).waitFor();
+        const accountKey = page.getByLabel('GTS_KeyTS（账户私钥 PEM）', {exact: true});
+        await accountKey.waitFor();
+        assert.equal(await accountKey.getAttribute('placeholder'), '未配置，请填写');
+        assert.equal(await page.getByLabel('SSL_KeyTS（账户私钥 PEM）', {exact: true}).getAttribute('placeholder'), '已配置，留空保留现有值');
+        assert.equal(await page.getByText('未配置', {exact: true}).count(), 0);
+        await accountKey.fill('synthetic-account-key-input');
+        assert.equal(await accountKey.inputValue(), 'synthetic-account-key-input');
+        await page.setViewportSize({width: 390, height: 844});
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+        await page.screenshot({path: directory + 'mobile-system-settings.png', fullPage: true});
+        await page.setViewportSize({width: 1440, height: 1000});
+        await page.locator('aside:visible').first().waitFor();
+        sidebar = await page.locator('aside:visible').first().elementHandle();
+        assert.ok(sidebar);
         await page.getByRole("button", {name: "\u542f\u7528 DCV \u6258\u7ba1", exact: true}).click();
         await page.getByPlaceholder("dcv.example.com").fill("dcv.example.org");
         await page.getByPlaceholder("\u7c98\u8d34 Cloudflare DNS API Token").fill("fixture-dcv-token");
@@ -1319,6 +1393,12 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         const refresh = (await page.getByRole('button', {name: '刷新', exact: true}).boundingBox())!;
         assert.ok(back.x < refresh.x);
         const failed = page.getByRole("row").filter({hasText: "Public Nginx"});
+        await failed.getByRole('button', {name: '查看请求和响应详情', exact: true}).hover();
+        await page.getByText('响应 Body', {exact: true}).waitFor();
+        await page.getByText(/POST https:\/\/esa\.cn-hangzhou\.aliyuncs\.com/).waitFor();
+        assert.match(await page.locator('.ant-popover:visible pre').innerText(), /error code: 1016/);
+        await page.screenshot({path: directory + 'cloud-error-response-details.png', fullPage: true});
+        await page.keyboard.press('Escape');
         await failed.getByRole("button", {name: "\u91cd\u8bd5\u6b64\u76ee\u6807"}).click();
         await failed.getByText("\u5df2\u90e8\u7f72", {exact: true}).waitFor({state: "visible"});
         assert.equal(calls.filter((call) => call.path.endsWith("/retry")).length, 1);
@@ -1435,10 +1515,27 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.locator('.ant-select-dropdown:visible').getByText('阿里云 ESA', {exact: true}).click();
         await page.getByText('证书上传至 ESA 站点，无需单独绑定域名', {exact: true}).waitFor();
         assert.equal(await page.getByLabel('部署哪些域名', {exact: true}).count(), 0);
+        await page.getByLabel('账号站点', {exact: true}).press('ArrowDown');
+        await page.locator('.ant-select-dropdown:visible').getByText('国际站', {exact: true}).click();
+        await page.getByText(/esa\.ap-southeast-1\.aliyuncs\.com/).waitFor();
+        const aliSecret = page.getByLabel('AccessKeySecret', {exact: true});
+        await aliSecret.fill('synthetic-ali-secret');
+        await aliSecret.focus();
+        const decorations = await aliSecret.evaluate((element) => ({background: getComputedStyle(element).backgroundColor,
+            shadow: getComputedStyle(element).boxShadow, border: getComputedStyle(element).borderTopWidth,
+            outerBorder: getComputedStyle(element.parentElement!).borderTopWidth}));
+        assert.equal(decorations.background, 'rgba(0, 0, 0, 0)');
+        assert.equal(decorations.shadow, 'none');
+        assert.equal(decorations.border, '0px');
+        assert.equal(decorations.outerBorder, '1px');
+        await page.screenshot({path: directory + 'focused-cloud-secret-border.png', fullPage: true});
         await page.getByLabel('类型', {exact: true}).press('ArrowDown');
         await page.locator('.ant-select-dropdown:visible').getByText('EdgeOne', {exact: true}).click();
         await page.getByText('证书先上传腾讯云 SSL 控制台，可选择是否绑定 EdgeOne 域名', {exact: true}).waitFor();
         assert.equal(await page.getByLabel('加速域名', {exact: true}).count(), 0);
+        await page.getByLabel('账号站点', {exact: true}).press('ArrowDown');
+        await page.locator('.ant-select-dropdown:visible').getByText('国际站', {exact: true}).click();
+        await page.getByText(/teo\.intl\.tencentcloudapi\.com/).waitFor();
         await page.screenshot({path: directory + 'cloud-upload-target.png', fullPage: true});
         await page.getByRole('button', {name: /取\s*消/, exact: true}).click();
         await page.getByRole("button", {name: /\u65b0\s*\u5efa/}).click();
@@ -1815,4 +1912,28 @@ test('private cloud targets use selected certificates while sharing remains expl
     await assert.rejects(saveResource(dao, secret, 'DEPLOY_TARGET', user, {grants: ['other@example.com']}, resource.id));
     await assert.rejects(saveResource(dao, secret, 'DEPLOY_TARGET', user,
         {name: 'forged', provider: 'https', scopeMode: 'certificate', zones: [], grants: [], config: {}, secrets: {}}, 'not-cloud'));
+});
+
+test('mainland and international sites use their own signed endpoints and reject arbitrary hosts', async () => {
+    const original = globalThis.fetch;
+    const requests: {host: string; action: string}[] = [];
+    globalThis.fetch = (async (input: any, options: any) => {
+        const headers = new Headers(options.headers);
+        requests.push({host: new URL(String(input)).hostname, action: headers.get('x-acs-action') || headers.get('x-tc-action') || ''});
+        return Response.json({Response: {}, Sites: []});
+    }) as any;
+    try {
+        for (const market of ['mainland', 'international'] as const) {
+            await teoCall({secretId: 'fixture', secretKey: 'fixture', market}, 'DescribeZones');
+            await sslCall({secretId: 'fixture', secretKey: 'fixture', market}, 'DescribeCertificates');
+            await esaCall({accessKeyId: 'fixture', accessKeySecret: 'fixture', market}, {action: 'ListSites', version: '2024-09-10'});
+        }
+        assert.deepEqual(requests.map((request) => request.host), ['teo.tencentcloudapi.com', 'ssl.tencentcloudapi.com',
+            'esa.cn-hangzhou.aliyuncs.com', 'teo.intl.tencentcloudapi.com', 'ssl.tencentcloudapi.com', 'esa.ap-southeast-1.aliyuncs.com']);
+        await assert.rejects(esaCall({accessKeyId: 'fixture', accessKeySecret: 'fixture', endpoint: 'untrusted.example.com'},
+            {action: 'ListSites', version: '2024-09-10'}), /不支持/);
+        await assert.rejects(esaCall({accessKeyId: 'fixture', accessKeySecret: 'fixture', market: 'international', endpoint: 'esa.cn-hangzhou.aliyuncs.com'},
+            {action: 'ListSites', version: '2024-09-10'}), /不匹配/);
+        assert.throws(() => validateResourceConfig('esa', {market: 'unknown'}, {accessKeyId: 'fixture', accessKeySecret: 'fixture'}), /中国站或国际站/);
+    } finally { globalThis.fetch = original; }
 });

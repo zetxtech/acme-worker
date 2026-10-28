@@ -1,5 +1,13 @@
 # Worker Certificate Workflow Implementation Plan
 
+## Current Work: Form Borders And Cloud Diagnostics (2026-10-28)
+- Completed and released as 7a7fa608-5d49-4593-be20-82e987b5448e. Full 48-test suite, production build, browser style/hover/mobile checks and live non-mutating health/binding/credential readback passed. Tests do not claim real cloud certificate deployment success. Original artifact-check order absent on readback; no recreation performed. Source ready for final commit/push.
+- Reproduce nested AntD input focus/background painting over the outer border; fix nested decoration rather than increasing arbitrary border width.
+- System settings: responsive label/control/action rows, unknown loading state, placeholders for absent/configured credentials rather than configuration badges; retain safe secret editing and save semantics.
+- Cloud operations: preserve sanitized method, endpoint, action, HTTP status and bounded response body across signer, persistence, API and hover detail. Never expose signed authorization, private keys, query secrets or raw credentials.
+- Verify mainland/international ESA and EdgeOne endpoints against official references. Make account site explicit and backward-compatible without silently trying credentials at other sites.
+- Focused tests, browser focus/layout/hover assertions, full regression/build, verified release and authorized commit/push. No Tasks, WSL, external backend or production certificate mutations.
+
 ## Current Work: Certificate Management Cleanup (2026-10-28)
 - Released: 3b405e53-aa9b-48c1-b177-84ee6e065efb. All implementation and acceptance gates passed (45/45 full tests, frontend build, actual Worker release, live health/credential/artifact verification). Existing external monitor migration was refused on destination mismatch and left unchanged; the old alias preserves its operation. Real cloud-account writes remain untested without a supplied target. Source ready for final commit/push.
 - Separate permanent record deletion from cancellation/revocation; require exact ID and ownership, remove only owned challenge records and order-local state under the execution lock.
