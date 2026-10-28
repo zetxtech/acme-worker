@@ -21,13 +21,15 @@ import styles from './Panel.module.css';
 export interface UserSectionProps {
   email: string;
   defaultExpanded?: boolean;
+  collapsible?: boolean;
 }
 
-export default function UserSection({ email, defaultExpanded = false }: UserSectionProps) {
+export default function UserSection({ email, defaultExpanded = false, collapsible = true }: UserSectionProps) {
   const { modal, message } = App.useApp();
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [token, setToken] = useState('');
   const [savingToken, setSavingToken] = useState(false);
+  const Header = collapsible ? 'button' : 'div';
 
   const curlExample = useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -115,10 +117,11 @@ jq -r '.keys' cert.json > /path/to/keys.pem`;
 
   return (
     <div id="user-section" className={styles.collapseCard}>
-      <button
-        type="button"
+      <Header
+        type={collapsible ? 'button' : undefined}
         className={styles.collapseHeader}
-        onClick={() => setExpanded(!expanded)}
+        style={!collapsible ? {cursor: 'default'} : undefined}
+        onClick={collapsible ? () => setExpanded(!expanded) : undefined}
       >
         <SectionHeader
           icon={<UserCog size={16} />}
@@ -126,17 +129,17 @@ jq -r '.keys' cert.json > /path/to/keys.pem`;
           subtitle="API Token、密码管理与账号删除"
           compact
         />
-        <motion.span
+        {collapsible && <motion.span
           className={styles.collapseArrow}
           animate={{ rotate: expanded ? 90 : 0 }}
           transition={{ duration: 0.2 }}
         >
           <ChevronRight size={18} />
-        </motion.span>
-      </button>
+        </motion.span>}
+      </Header>
 
       <AnimatePresence initial={false}>
-        {expanded && (
+        {(expanded || !collapsible) && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}

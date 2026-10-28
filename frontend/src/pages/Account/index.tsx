@@ -20,8 +20,8 @@ export default function Account() {
 
       {/* 两列布局：ACME 密钥 + 账号操作 */}
       <div className={styles.grid}>
-        <AcmeSection defaultExpanded />
-        <UserSection email={email || ''} defaultExpanded />
+        <AcmeSection defaultExpanded collapsible={false} />
+        <UserSection email={email || ''} defaultExpanded collapsible={false} />
       </div>
     </PageShell>
   );

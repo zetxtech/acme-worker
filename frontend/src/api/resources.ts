@@ -8,7 +8,7 @@ export interface WorkflowResource {
   grants: string[];
   zones: string[];
   kind?: 'DNS_ACCOUNT' | 'DEPLOY_TARGET';
-  scopeMode?: 'zones' | 'account';
+  scopeMode?: 'zones' | 'account' | 'certificate';
   enabled: boolean;
   config: Record<string, any>;
   credentialsConfigured: boolean;
@@ -61,6 +61,8 @@ export function resourceSelectable(resource: WorkflowResource, mail: string | nu
   const owner = resource.owner === mail?.toLowerCase();
   const automatic = resource.kind === 'DNS_ACCOUNT' && resource.scopeMode === 'account' && !resource.zones.length && !resource.grants.length;
   if (automatic) return resource.enabled && resource.available !== false && owner;
+  if (resource.kind === 'DEPLOY_TARGET' && ['edgeone', 'esa'].includes(resource.provider) && resource.scopeMode === 'certificate'
+    && !resource.zones.length && !resource.grants.length) return resource.enabled && resource.available !== false && owner;
   return resource.enabled && resource.available !== false && resource.zones.length > 0 && (owner || resource.grants.includes(mail?.toLowerCase() ?? ''))
     && domains.every((domain) => resource.zones.some((zone) => {
       const name = domain.toLowerCase().replace(/^\*\./, '');

@@ -15,6 +15,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { Order, OrderAction } from '@api/types';
+import { DELETE_ORDER_WARNING } from '@api/order';
 import { handleDownloadZip, handleDownloadPfx } from '@utils/certDownload';
 import styles from './Order.module.css';
 
@@ -167,11 +168,11 @@ export default function OrderActions({
             disabled={operating}
             onClick={() =>
               onAction('edge_push', undefined, {
-                confirm: '确认把当前证书重新下发到所有启用的边缘平台？',
+                confirm: '确认将当前证书重新部署到此订单选定的目标？不会部署到其他目标。',
               })
             }
           >
-            边缘下发
+            重新部署
           </Button>
           <Button
             size="large"
@@ -204,24 +205,12 @@ export default function OrderActions({
           >
             吊销证书
           </Button>
-          <Button
-            danger
-            size="large"
-            icon={<XCircle size={16} />}
-            loading={operating}
-            disabled={operating}
-            onClick={() =>
-              onAction('cancel', undefined, {
-                confirm: '确认删除此订单？所有相关信息将丢失',
-                danger: true,
-                requireConfirmId: order.uuid,
-              })
-            }
-          >
-            删除订单
-          </Button>
         </>
       )}
+      <Button danger size="large" icon={<Trash2 size={16} />} loading={operating} disabled={operating}
+        onClick={() => onAction('delete', undefined, {confirm: DELETE_ORDER_WARNING, danger: true, requireConfirmId: order.uuid})}>
+        删除订单
+      </Button>
     </div>
   );
 }

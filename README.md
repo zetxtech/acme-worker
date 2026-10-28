@@ -4,7 +4,7 @@
 
 **基于 Cloudflare Worker / EdgeOne Pages 的全自动化 SSL 证书申请与下发平台**
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![EdgeOne](https://img.shields.io/badge/Tencent-EdgeOne-00A4FF?logo=tencentqq&logoColor=white)](https://edgeone.ai/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
@@ -92,7 +92,8 @@
 
 - CA 选项由 `/capabilities` 和 `/api/v1/capabilities` 返回实际配置状态；两套创建入口均在保存订单前校验。Google Public CA、ZeroSSL 和 SSL.com 复用现有全局账户私钥，并按目录与私钥指纹保存已注册账户 URL。
 - Let's Encrypt 无需 EAB；Google Public CA 和 ZeroSSL 需要相应账户配置。SSL.com 免费 DV 的限制为单个 FQDN，不支持通配、多域名或 IP；其他产品的费用取决于账户产品，不能据此视为免费。未使用真实 CA 账户进行产品或费用验证。
-- “资源管理”提供 DNS 服务商账户，以及 HTTPS、SSH/SFTP、Nginx、Traefik、EdgeOne 和 ESA 部署目标。侧边栏已拆分为“域名资源”与“部署目标”两个入口，旧 `/resources` 会重定向到域名资源。私有 DNS 账户默认按申请域名和服务商权限自动查找区域，不需要预先填写域名；可在高级设置中选择限制域名。部署目标和共享资源仍需明确域名范围；共享由管理员主动启用，不因管理员身份默认获得资源使用权。检查连接时需选择实际域名；涉及临时 TXT 写入和清理的检查会先要求确认。
+- “DNS 验证账号”管理 DNS 凭据；“部署目标”管理 HTTPS、SSH/SFTP、Nginx、Traefik、EdgeOne 和 ESA。私有 DNS 账号按实际申请名称逐级查找最具体的可访问区域，支持 `*.zetx.pp.ua` 等多级名称，不假设区域只有最后两段。云部署目标默认处理选中的证书，ESA 上传至站点，EdgeOne 可仅上传或同时绑定域名。共享目标仍须限制域名，且不因管理员身份默认获得他人的资源使用权。
+- 取消申请只停止后台处理并保留记录；永久删除是独立操作，需要完整订单 ID 确认，只删除本站资料而不调用 CA 吊销。需要吊销的证书应先吊销，再删除本站记录。部署/签发执行中会阻止不安全的删除。本站删除不会替你删除已经部署到云平台或服务器的副本。
 
 ### 后台签发与申请修改
 
@@ -235,7 +236,7 @@ npm run web-install
 
 > Cloudflare 免费套餐对**每个账号**只允许 5 个 cron 触发器。若配额已被其它 Worker 占用，部署时会报
 > `This account has reached the Workers Free limit of 5 cron triggers per account`。
-> 此时请删除本文件的 `triggers` 字段，改用下文「触发器端点」由外部调度器驱动。
+> 此时请删除本文件的 `triggers` 字段，改用下文固定 `/cron` 入口由外部调度器驱动。
 
 ### 4. 本地调试
 
@@ -281,56 +282,39 @@ npm run deploy-cf:test
 
 ## ⚙️ 自动化
 
-管理后台「自动化」页面（`/admin/automation`）提供三块能力，全部在运行时配置，改动无需重新部署。
-
-### 1. 触发器端点（访问即等同于 cron）
-
-为每个端点设置名称、令牌与要执行的任务后，用任意外部调度器定时请求：
+后台维护只有固定认证入口，不需要创建端点、勾选任务或开启开关。管理员可在 `/admin/automation` 复制调用地址并查看运行记录。
 
 ```bash
-curl "https://<你的域名>/trigger/<端点名>?token=<令牌>"
+curl "https://<你的域名>/cron?token=<令牌>"
 ```
 
 响应示例：
 
 ```json
 {
-  "code": "OK",
-  "trigger": "acme-tasks",
-  "status": "ok",
-  "detail": "[process] 推进 2 个订单 | [edge-sync] 检查 3 个已签发订单，成功下发 1 次"
+  "ok": true,
+  "status": "ok"
 }
 ```
 
-令牌也可通过 `X-Trigger-Token` 请求头传递；端点停用或令牌不匹配分别返回 `403` / `401`。
+支持 GET/POST。外部监控也可以把令牌放在 `X-Trigger-Token` 请求头而不是 URL。旧的 `/trigger/scheduled` 仅保留迁移兼容，复用原令牌；不再提供可编辑触发器。旧任务开关不控制维护执行，数据库执行锁避免并发重复工作。
 
-可选任务：
+每次维护自动恢复任务、安排临近到期证书续期、重试所选部署目标和清理验证记录。单个申请仍由 Worker 内持久闹钟独立推进，不依赖页面停留，也无需用户点击“立即处理”。
 
-| 任务 | 说明 |
-| --- | --- |
-| `process` | 按状态机推进所有未完成的订单（创建订单 / 写入 DNS / 完成验证 / 签发证书） |
-| `renew` | 扫描已开启自动续期且临近到期的证书并重新签发（提前天数可配置） |
-| `edge-sync` | 把已签发但未下发或下发失败的证书重新推送到边缘平台 |
-| `clean-dns` | 删除 DCV 代理域名下超过 7 天的验证 TXT 记录 |
+### 云部署目标
 
-### 2. 边缘证书自动下发
-
-证书**签发或自动续期成功后**会自动推送到已启用的目标，失败不影响签发，可由 `edge-sync` 任务或页面上的「补下发」重试。
+云证书与本站申请的关联保存在订单目标状态中，证书签发、上传、绑定和异步更新任务分别处理。失败不会把签发结果改成失败。旧全局边缘下发不再执行；所有部署必须来自订单选择的目标。
 
 | 平台 | 调用链 | 所需权限 |
 | --- | --- | --- |
-| 腾讯云 EdgeOne | `ssl:UploadCertificate` → `teo:ModifyHostsCertificate`（`Mode=sslcert`） | `teo:DescribeZones`、`teo:DescribeAccelerationDomains`、`teo:ModifyHostsCertificate`、`ssl:UploadCertificate` |
+| 腾讯云 EdgeOne | 上传至 SSL 控制台，可选绑定；续期检查旧资源关联更新结果 | `ssl:UploadCertificate`、`ssl:UpdateCertificateInstance`、`ssl:DescribeHostUpdateRecordDetail`；绑定模式额外需要 `teo:DescribeZones`、`teo:DescribeAccelerationDomains`、`teo:DescribeHostsSetting`、`teo:ModifyHostsCertificate` |
 | 阿里云 ESA | `esa:SetCertificate`（`Type=upload`） | `esa:ListSites`、`esa:SetCertificate` |
 
-- 站点 ID（EdgeOne `ZoneId` / ESA `SiteId`）与加速域名可留空，系统会按证书域名自动匹配。
-- 「适用域名」用于限定目标生效范围，支持精确域名与 `*.example.com`，留空表示对所有订单生效。
-- 同一张证书重复下发会被识别并跳过，证书内容变化时才会再次调用平台接口。
-- EdgeOne 使用 TC3-HMAC-SHA256，ESA 使用 ACS3-HMAC-SHA256，签名均在 Worker 内用 WebCrypto 完成。
-
-### 3. 定时任务
-
-若账号仍有 cron 配额，可在「自动任务」中启用 Cloudflare 定时触发并设置最小执行间隔（默认 60 分钟）与执行任务；
-`src/cfapp.ts` 的 `scheduled()` 会按该配置执行。没有配额时使用触发器端点即可，两者执行的是同一套任务。
+- ESA：首次上传后保存云端 `Id`，后续 `SetCertificate` 带同一 `Id` 更新，不另行绑定域名。可填写已有 `certificate_id` 接管现有证书。
+- EdgeOne：`UploadCertificate` 创建新 SSL 证书 ID，不保证原 ID 不变。系统保存新旧 ID，通过官方异步更新迁移 EdgeOne 资源关联，只有成功才标记完成；不会擅自删除旧云证书。仅上传模式不要求站点或加速域名。
+- 绑定模式会检查证书覆盖范围，并查询每个域名已有证书：更新 RSA 保留 ECC，更新 ECC 保留 RSA，每种最多一本，不支持 SM2；无法确认原算法时拒绝覆盖。
+- 私有云目标默认只处理本人选择的证书；共享仍需明确域名范围。不存在把空范围广播到所有用户申请的行为。
+- 已经选用 Cloudflare `scheduled()` 的部署使用同一个固定维护流程，不再有页面开关或任务列表。
 
 #### ② 部署到 EdgeOne Pages
 
@@ -593,7 +577,7 @@ npm run deploy-cf
 
 ## 📄 License
 
-本项目基于 [Apache License 2.0](LICENSE) 开源，欢迎贡献代码与提出建议！
+本项目基于 [GNU GPL v3](LICENSE) 开源，完整条款以 LICENSE 文件为准。
 
 <div align="center">
 

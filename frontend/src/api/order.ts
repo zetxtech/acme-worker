@@ -80,6 +80,13 @@ export async function endOrderEdit(uuid: string, revision: string): Promise<void
   await apiPost(`/apply/${encodeURIComponent(uuid)}/resume`, {revision});
 }
 
+export const DELETE_ORDER_WARNING = '该订单的所有信息（证书、私钥、验证记录）将被永久删除，已签发证书不会被取消申请删除，如需吊销证书，请先进行吊销操作，删除后无法再进行吊销。请输入完整订单 ID 以确认。';
+
+export async function deleteSavedOrder(uuid: string): Promise<void> {
+  const { data } = await http.delete<ApiResp>(`/orders/${encodeURIComponent(uuid)}`, {data: {confirmId: uuid}});
+  if (data.flags !== 0) throw new Error(data.texts || '删除订单失败');
+}
+
 /**
  * 证书吊销原因（RFC 5280 / RFC 8555 §7.6）
  * 参考：https://datatracker.ietf.org/doc/html/rfc5280#section-5.3.1
@@ -121,6 +128,10 @@ export async function operateOrder(
   domainName?: string,
   opts?: { revokeReason?: RevokeReason },
 ): Promise<{ value: string; texts: string }> {
+  if (action === 'delete') {
+    await deleteSavedOrder(uuid);
+    return {value: '', texts: '订单已删除'};
+  }
   const params: Record<string, any> = { id: uuid, op: action };
   if (domainName) params.cd = domainName;
   if (action === 'ca_del' && opts?.revokeReason !== undefined) {

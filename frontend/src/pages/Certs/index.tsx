@@ -28,7 +28,7 @@ import ConfirmIdContent from '@components/molecules/ConfirmIdContent';
 import RevokeReasonSelect from '@components/molecules/RevokeReasonSelect';
 import Pill from '@components/atoms/Pill';
 import { useCopy } from '@hooks/useCopy';
-import { listOrders, operateOrder, RevokeReason } from '@api/order';
+import { DELETE_ORDER_WARNING, deleteSavedOrder, listOrders, operateOrder, RevokeReason } from '@api/order';
 import type { OrderRaw } from '@api/types';
 import {
   FLAG_MAP,
@@ -235,11 +235,11 @@ export default function Certs() {
   const handleDelete = (uuid: string) => {
     openDangerConfirm({
       title: '确认删除订单？',
-      tip: '该订单的所有信息（证书、私钥、验证记录）将被永久删除，此操作不可恢复。请输入完整订单 ID 以确认。',
+      tip: DELETE_ORDER_WARNING,
       uuid,
       okText: '确认删除',
       run: async () => {
-        await operateOrder(uuid, 'cancel');
+        await deleteSavedOrder(uuid);
         message.success(`订单已删除 ${randomKaomoji('success')}`);
         load();
       },

@@ -218,6 +218,22 @@
   border: 1px solid transparent !important;
 }
 
+.ant-table-wrapper:has(.ant-table-placeholder) .ant-table-content,
+.ant-table-wrapper:has(.ant-table-placeholder) .ant-table-body {
+  overflow-x: hidden !important;
+}
+
+.ant-table-wrapper:has(.ant-table-placeholder) .ant-table-sticky-scroll {
+  display: none;
+}
+
+.ant-card-head-title > span,
+.ant-alert-message > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* ---------- Card ---------- */
 .ant-card {
   background: var(--bg-panel) !important;
@@ -486,9 +502,9 @@
 /* ---------- 图标对齐（卡片标题 / 标签 / 提示框）----------
  * 图标组件与中英文文本混排时基线不一致，统一改为居中弹性对齐。
  */
-.ant-card-head-title {
-  display: flex;
-  align-items: center;
+.ant-card .ant-card-head .ant-card-head-title {
+  display: flex !important;
+  align-items: center !important;
   gap: 8px;
   min-width: 0;
 }

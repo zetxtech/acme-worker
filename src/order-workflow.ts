@@ -297,3 +297,32 @@ export class CertificateWorkflow {
         }
     }
 }
+
+export async function deleteSavedOrder(env: Bindings, uuid: string, mail: string, confirmation: string) {
+    if (confirmation !== uuid) throw new Error('请输入完整订单 ID 以确认');
+    const dao = await ensureDao(env);
+    const row = await dao.getApply(uuid);
+    if (!row || row.mail.toLowerCase() !== mail.toLowerCase()) throw new Error('申请不存在或无权删除');
+    if (!dao.claimConfLease || !dao.releaseConfLease) throw new Error('Order locking is unavailable');
+    const lease = `ORDER_WORK_LEASE:${uuid}`;
+    const token = crypto.randomUUID();
+    if (!await dao.claimConfLease(lease, token, Date.now() + 120000, Date.now())) throw new Error('申请正在执行，请稍后再删除');
+    try {
+        const records = await dao.listConfs();
+        if (records.some((record) => record.name.startsWith(`DEPLOY_LEASE:${uuid}:`) && Number(record.time) > Date.now())) {
+            throw new Error('部署正在执行，请稍后再删除');
+        }
+        await cleanup(env, row);
+        const keys = new Set([`ORDER_WORK:${uuid}`, `ORDER_EDIT:${uuid}`, `ORDER_DEPLOYMENT:${uuid}`,
+            `ORDER_PREVIOUS:${uuid}`, `LEGO_STATE:${uuid}`]);
+        const prefixes = [`DEPLOY_STATE:${uuid}:`, `DEPLOY_LEASE:${uuid}:`, `CLOUD_CERT:${uuid}:`];
+        for (const record of records) {
+            if (keys.has(record.name) || prefixes.some((prefix) => record.name.startsWith(prefix))) await dao.deleteConf(record.name);
+        }
+        const log = JSON.parse(await dao.getConf('AUTO_LOG') ?? '[]');
+        if (Array.isArray(log) && log.some((item: any) => item.order === uuid)) await dao.upsertConf('AUTO_LOG', JSON.stringify(log.filter((item: any) => item.order !== uuid)), Date.now());
+        const legacy = JSON.parse(await dao.getConf('EDGE_STATE') ?? '{}');
+        if (legacy[uuid]) { delete legacy[uuid]; await dao.upsertConf('EDGE_STATE', JSON.stringify(legacy), Date.now()); }
+        await dao.deleteApply(uuid);
+    } finally { await dao.releaseConfLease(lease, token); }
+}

@@ -5,7 +5,7 @@ export function validateResourceConfig(provider: string, config: Record<string, 
     const fields: Record<string, string[]> = {
         cloudflare: [], dnspod: [], alidns: [], https: ["url", "method", "timeout"],
         ssh: ["host", "port", "username", "fingerprint", "timeout", "format", "certificatePath", "privateKeyPath", "pfxPath", "privateKeyMode", "testCommand", "reloadCommand"],
-        edgeone: ["zone_id", "hosts", "region", "alias"], esa: ["site_id", "cert_name"],
+        edgeone: ["zone_id", "hosts", "region", "alias", "mode", "certificate_id"], esa: ["site_id", "cert_name", "certificate_id"],
     };
     fields.nginx = fields.ssh;
     fields.traefik = [...fields.ssh, "traefikMode", "dynamicPath", "acmePath", "resolver", "externalWriterStopped"];
@@ -50,4 +50,6 @@ export function validateResourceConfig(provider: string, config: Record<string, 
     }
     if (provider === "edgeone" && config.hosts && (!Array.isArray(config.hosts) || config.hosts.length > 100
         || config.hosts.some((host: any) => typeof host !== "string"))) throw new Error("Invalid EdgeOne hosts");
+    if (provider === 'edgeone' && config.mode && !['upload', 'bind'].includes(config.mode)) throw new Error('Invalid EdgeOne mode');
+    if (config.certificate_id && !/^[A-Za-z0-9_-]{1,128}$/.test(config.certificate_id)) throw new Error('Invalid cloud certificate ID');
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from 'antd';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronRight, Globe, PlayCircle } from 'lucide-react';
@@ -53,6 +53,9 @@ function DomainPanel({
 }) {
   const [expanded, setExpanded] = useState(false);
   const flag = domain.flag ?? 0;
+  const verified = flag >= 4;
+  useEffect(() => { if (verified) setExpanded(false); }, [verified]);
+  const Header = verified ? 'div' : 'button';
   const automatic = domain.type === 'dns-api';
   const pulseStatus = flag >= 4 ? 'success' : flag < 0 ? 'failed' : automatic || flag === 3 ? 'verifying' : 'pending';
   const isVerifiable = flag === 2 && (!automatic && domain.type !== 'dns-auto' || domain.dnsStatus === 'waiting_delegation');
@@ -72,10 +75,12 @@ function DomainPanel({
 
   return (
     <div className={styles.domainPanel}>
-      <button
-        type="button"
+      <Header
+        type={verified ? undefined : 'button'}
         className={styles.domainPanelHead}
-        onClick={() => setExpanded(!expanded)}
+        style={verified ? {cursor: 'default'} : undefined}
+        aria-expanded={verified ? undefined : expanded}
+        onClick={verified ? undefined : () => setExpanded(!expanded)}
       >
         <div className={styles.domainPanelLeft}>
           <StatusPulse status={pulseStatus} size={8} />
@@ -100,16 +105,16 @@ function DomainPanel({
             {status}
           </Pill>
         </div>
-        <motion.div
+        {!verified && <motion.div
           animate={{ rotate: expanded ? 90 : 0 }}
           transition={{ duration: 0.2 }}
         >
           <ChevronRight size={16} className={styles.domainPanelArrow} />
-        </motion.div>
-      </button>
+        </motion.div>}
+      </Header>
 
       <AnimatePresence initial={false}>
-        {expanded && (
+        {expanded && !verified && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
@@ -129,11 +134,11 @@ function DomainPanel({
                   ? `http://${domain.name}/.well-known/acme-challenge/${domain.token ?? ''}` : recordName} />
                 <DnsRow label="记录值" value={recordValue} mono />
                 {domain.type === 'dns-api' && <DnsRow label="DNS 账户" value={domain.dnsAccountId ?? '-'}/>}
-                <DnsRow
+                {domain.type !== 'web-self' && <DnsRow
                   label="验证命令"
                   value={`nslookup -q=${recordType} ${recordName}`}
                   mono
-                />
+                />}
               </div>}
 
               {isVerifiable && <div className={styles.domainActions}>

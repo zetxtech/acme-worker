@@ -129,14 +129,13 @@ export default function AboutPage() {
           {/* 开源协议 */}
           <Card className={styles.infoCard} title={<><Scale size={16} /> 开源协议</>}>
             <Paragraph>
-              本项目基于 <Text strong>MIT License</Text> 开源协议发布。
+              本项目基于 <Text strong>GNU GPL v3</Text> 开源协议发布，完整条款以仓库 LICENSE 文件为准。
             </Paragraph>
             <Paragraph>
               您可以自由地使用、修改和分发本项目的代码，但需保留原始版权声明。
             </Paragraph>
             <Paragraph type="secondary">
-              MIT 协议是最宽松的开源协议之一，允许商业使用、私有修改和再分发，
-              唯一的要求是在副本中包含版权声明和许可声明。
+              分发项目或修改版本时，请遵守许可证关于版权声明、许可证副本和对应源码的要求。
             </Paragraph>
             <Divider style={{ margin: '12px 0' }} />
             <Paragraph>

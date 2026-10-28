@@ -24,6 +24,7 @@ import {D1Dao} from "../src/db/dao.d1";
 import {_resetDaoForTests} from "../src/db";
 import {invalidateAll} from "../src/db/conf";
 import {retryDnsCleanup} from "../src/query";
+import {deployTarget} from '../src/edge';
 import {dnsCatalog, dnsShard, validateDnsSettings, verifiedDnsAccount} from "../src/lego/registry";
 import {issueLegoOrder, testLegoAccount} from "../src/lego/dispatch";
 import shardBuilds from "../src/lego-shards.generated.json";
@@ -656,6 +657,23 @@ test("orders are accepted for background execution and modify never deletes the 
         assert.equal((await dao.getApply(body.order))!.flag, -1);
         const listed: any = await (await app.request('http://localhost/order/?id=all', {headers}, env)).json();
         assert.equal(listed.order[0].work.status, 'cancelled');
+        await dao.updateApply(body.order, {flag: 5, cert: 'issued-fixture', keys: 'fixture-private-key', list: '[]'});
+        await dao.upsertConf(`DEPLOY_STATE:${body.order}:target`, '{"status":"ok"}', Date.now());
+        const removalUrl = `http://localhost/orders/${body.order}`;
+        const wrongConfirmation = await app.request(removalUrl, {method: 'DELETE', headers, body: JSON.stringify({confirmId: 'wrong'})}, env);
+        assert.equal(wrongConfirmation.status, 400);
+        assert.ok(await dao.getApply(body.order));
+        await dao.upsertConf(`DEPLOY_LEASE:${body.order}:target`, 'active', Date.now() + 60000);
+        const busy = await app.request(removalUrl, {method: 'DELETE', headers, body: JSON.stringify({confirmId: body.order})}, env);
+        assert.equal(busy.status, 409);
+        assert.ok(await dao.getApply(body.order));
+        await dao.deleteConf(`DEPLOY_LEASE:${body.order}:target`);
+        const removed = await app.request(removalUrl, {method: 'DELETE', headers, body: JSON.stringify({confirmId: body.order})}, env);
+        assert.equal(removed.status, 200, await removed.clone().text());
+        assert.equal(await dao.getApply(body.order), null);
+        assert.equal(await dao.getConf(`DEPLOY_STATE:${body.order}:target`), null);
+        assert.equal(await dao.getConf(`ORDER_WORK:${body.order}`), null);
+        assert.equal(externalCalls, 0, 'Deleting the saved artifact must not revoke it at the CA');
     } finally { globalThis.fetch = originalFetch; _resetDaoForTests(); invalidateAll(); database.close(); }
 });
 
@@ -678,6 +696,104 @@ test("workerd durable alarms finish a queued request without a browser driving p
     assert.equal(result.work.status, 'complete');
     assert.equal(result.work.nextRun, 0);
     assert.ok(observed.size >= 3);
+});
+
+test('ESA updates the saved certificate ID and EdgeOne separates upload, link migration and dual algorithm binding', async () => {
+    const original = globalThis.fetch;
+    const calls: {host: string; action: string; parameters: any}[] = [];
+    let taskPending = true;
+    globalThis.fetch = (async (input: any, options: any) => {
+        const url = new URL(String(input));
+        const headers = new Headers(options.headers);
+        const action = headers.get('x-acs-action') || headers.get('x-tc-action') || '';
+        const parameters = url.hostname.endsWith('aliyuncs.com') ? Object.fromEntries(url.searchParams) : JSON.parse(options.body);
+        calls.push({host: url.hostname, action, parameters});
+        let result: any = {};
+        if (action === 'SetCertificate') result = {Id: parameters.Id || 'esa-one'};
+        if (action === 'UploadCertificate') result = {CertificateId: 'new-rsa'};
+        if (action === 'UpdateCertificateInstance') result = {DeployRecordId: 42};
+        if (action === 'DescribeHostUpdateRecordDetail') result = {TotalCount: 1, SuccessTotalCount: taskPending ? 0 : 1,
+            FailedTotalCount: 0, RunningTotalCount: taskPending ? 1 : 0, PendingTotalCount: 0};
+        if (action === 'DescribeHostsSetting') result = {DetailHosts: [{Host: 'www.example.com', Https: {CertInfo: [
+            {CertId: 'old-rsa', SignAlgo: 'RSA-SHA256'}, {CertId: 'existing-ec', SignAlgo: 'ECDSA-SHA256'},
+        ]}}]};
+        return Response.json(url.hostname.endsWith('aliyuncs.com') ? result : {Response: result});
+    }) as any;
+    const context: any = {uuid: 'one', order: {}, domains: ['www.example.com'], cert: 'fixture-cert', key: 'fixture-key',
+        certificateFamily: 'rsa', hostAllowed: (host: string) => host === 'www.example.com'};
+    try {
+        const esa: any = {id: 'esa', type: 'esa', esa: {access_key_id: 'fixture', access_key_secret: 'fixture', site_id: '123'}};
+        const first = await deployTarget({} as any, esa, context, 'v1');
+        assert.equal(first.certId, 'esa-one');
+        await deployTarget({} as any, esa, {...context, previousCertificateId: first.certId}, 'v2');
+        const updates = calls.filter((call) => call.action === 'SetCertificate');
+        assert.equal(updates[1].parameters.Id, 'esa-one');
+        assert.equal(updates[1].parameters.SiteId, '123');
+        assert.equal('Hosts' in updates[1].parameters, false);
+        calls.length = 0;
+        const target: any = {id: 'teo', type: 'edgeone', edgeone: {secret_id: 'fixture', secret_key: 'fixture', mode: 'upload'}};
+        await deployTarget({} as any, target, context, 'v1');
+        assert.deepEqual(calls.map((call) => call.action), ['UploadCertificate']);
+        calls.length = 0;
+        const saved: any = {};
+        const pending = await deployTarget({} as any, target, {...context, previousCertificateId: 'old-rsa',
+            onUploaded: async (id: string) => { saved.id = id; }, onMigration: async (id: number) => { saved.task = id; }}, 'v2');
+        assert.equal(pending.pending, true);
+        assert.equal(saved.task, 42);
+        const migration = calls.find((call) => call.action === 'UpdateCertificateInstance')!;
+        assert.deepEqual(migration.parameters, {OldCertificateId: 'old-rsa', CertificateId: 'new-rsa', ResourceTypes: ['teo']});
+        taskPending = false;
+        calls.length = 0;
+        const complete = await deployTarget({} as any, target, {...context, previousCertificateId: 'old-rsa',
+            uploadedCertificateId: saved.id, migrationId: saved.task}, 'v2');
+        assert.equal(complete.pending, undefined);
+        assert.equal(calls.some((call) => call.action === 'UploadCertificate'), false);
+        calls.length = 0;
+        target.edgeone = {...target.edgeone, mode: 'bind', zone_id: 'zone-one', hosts: ['www.example.com']};
+        await deployTarget({} as any, target, {...context, uploadedCertificateId: 'new-rsa', migrationComplete: true}, 'v2');
+        const binding = calls.find((call) => call.action === 'ModifyHostsCertificate')!;
+        assert.deepEqual(binding.parameters.ServerCertInfo, [{CertId: 'new-rsa'}, {CertId: 'existing-ec'}]);
+    } finally { globalThis.fetch = original; }
+});
+
+test('fixed cron remains automatic despite removed legacy switches and preserves the existing credential', async () => {
+    _resetDaoForTests(); invalidateAll();
+    const database = memoryD1();
+    const dao = new D1Dao(database as any);
+    const env: any = {DB_CF: database, DB_SOURCE: 'd1'};
+    const {app} = await import('../src/index');
+    await dao.upsertConf('TRIGGERS', JSON.stringify([{name: 'scheduled', token: 'fixture-cron-key', enabled: false, jobs: []}]), Date.now());
+    await dao.upsertConf('SCHEDULE_ENABLED', 'false', Date.now());
+    await dao.upsertConf('SCHEDULE_JOBS', '', Date.now());
+    try {
+        assert.equal((await app.request('http://localhost/cron?token=wrong', {}, env)).status, 401);
+        const response = await app.request('http://localhost/cron?token=fixture-cron-key', {}, env);
+        assert.equal(response.status, 200, await response.clone().text());
+        assert.equal((await response.json() as any).ok, true);
+        assert.equal(await dao.getConf('CRON_TOKEN'), 'fixture-cron-key');
+        assert.ok(await dao.getConf('SCHEDULE_STATE'));
+        assert.equal((await app.request('http://localhost/trigger/not-scheduled?token=fixture-cron-key', {}, env)).status, 404);
+        for (const path of ['/tasks/', '/tests/', '/clean/']) assert.equal((await app.request(`http://localhost${path}`, {}, env)).status, 410);
+    } finally { _resetDaoForTests(); invalidateAll(); database.close(); }
+});
+
+test('multilevel wildcard zones are discovered from most specific accessible suffix', async () => {
+    const original = globalThis.fetch;
+    const candidates: string[] = [];
+    globalThis.fetch = (async (input: any) => {
+        const name = new URL(String(input)).searchParams.get('name')!;
+        candidates.push(name);
+        return Response.json({success: true, result: name === 'zetx.pp.ua' ? [{id: 'correct-zone', name}] : []});
+    }) as any;
+    try {
+        const account = {kind: 'DNS_ACCOUNT', scopeMode: 'account', grants: [], zones: [], provider: 'cloudflare'} as unknown as Resource;
+        const provider = new DnsProvider(account, {token: 'fixture'});
+        assert.deepEqual(await provider.zone('*.zetx.pp.ua'), {id: 'correct-zone', name: 'zetx.pp.ua'});
+        assert.deepEqual(candidates, ['zetx.pp.ua']);
+        candidates.length = 0;
+        assert.deepEqual(await provider.zone('*.nested.zetx.pp.ua'), {id: 'correct-zone', name: 'zetx.pp.ua'});
+        assert.deepEqual(candidates, ['nested.zetx.pp.ua', 'zetx.pp.ua']);
+    } finally { globalThis.fetch = original; }
 });
 
 test("delegated targets are stable and custom patterns cannot escape the administrator zone", () => {
@@ -862,7 +978,7 @@ test("workerd authenticates password/private key and performs real SFTP with rec
     }
 });
 
-test("desktop/mobile UI submits scoped resources and exposes CA and deployment states", {skip: !process.env.WORKFLOW_UI_URL, timeout: 180000}, async () => {
+test("desktop/mobile UI submits scoped resources and exposes CA and deployment states", {skip: !process.env.WORKFLOW_UI_URL, timeout: 240000}, async () => {
     const {chromium} = await import("playwright-core");
     const browser = await chromium.launch({channel: "chrome", headless: true});
     const context = await browser.newContext({viewport: {width: 1440, height: 1000}, hasTouch: true});
@@ -902,6 +1018,11 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
     await page.route("**/account/apitoken*", (route) => route.fulfill({json: {flags: 0, configured: false, fingerprint: "", mail: "fixture@example.org"}}));
     await page.route("**/admin/users*", (route) => route.fulfill({json: {flags: 0, items: [], total: 0, page: 1, page_size: 20}}));
     await page.route("**/admin/confs*", (route) => route.fulfill({json: {flags: 0, items: {}, secret_keys: []}}));
+    await page.route('**/admin/automation', (route) => route.fulfill({json: {flags: 0, endpoint: {url: `${base}/cron?token=fixture-only`}, log: []}}));
+    await page.route('**/orders/fixture-order', (route) => {
+        calls.push({path: '/orders/fixture-order', method: route.request().method(), body: route.request().postDataJSON()});
+        return route.fulfill({json: {flags: 0}});
+    });
     await page.route("**/capabilities", (route) => route.fulfill({json: {flags: 0, dcv: dcvAvailable
         ? {available: true, domain: "dcv.example.org", reason: "ready", missing: []}
         : {available: false, domain: "", reason: "missing_configuration", missing: admin ? ["DCV_AGENT", "DCV_ZONES", "DCV_API_TOKEN"] : []}, cas: [
@@ -988,6 +1109,7 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
     });
     await page.route("https://www.gravatar.com/**", (route) => route.abort());
     try {
+        console.log('UI acceptance: navigation shell');
         await page.goto(`${base}/#/panel`);
         await page.getByText("welcome back", {exact: false}).waitFor({state: "visible"});
         await page.screenshot({path: directory + "desktop-panel-ux.png", fullPage: true});
@@ -1011,7 +1133,10 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         const chunkStarted = new Promise<void>((resolve) => { chunkEntered = resolve; });
         await page.route("**/src/pages/Account/index.tsx*", async (route) => { chunkEntered(); await chunkGate; await route.continue(); });
         await navigate("/account");
-        await chunkStarted;
+        await Promise.race([chunkStarted, new Promise<never>((_resolve, reject) => {
+            const signal = AbortSignal.timeout(15000);
+            signal.addEventListener('abort', () => reject(new Error('Account lazy module was not requested during navigation')), {once: true});
+        })]);
         await page.locator('[role="status"][aria-busy="true"]').waitFor();
         assert.match(await page.locator('[role="status"][aria-busy="true"]').getAttribute("class") ?? "", /overlay/i);
         await assertShell();
@@ -1020,11 +1145,25 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.getByText("whoami", {exact: true}).waitFor();
         await page.locator('[role="status"][aria-busy="true"]').waitFor({state: "hidden"});
         await assertShell();
+        console.log('UI acceptance: account panels');
+        assert.equal(await page.getByRole('button').filter({hasText: 'ACME 账号密钥'}).count(), 0);
+        assert.equal(await page.getByRole('button').filter({hasText: '账号操作'}).count(), 0);
+        await page.getByText('这是 ACME 账户的签名密钥，不是网站证书的私钥', {exact: true}).waitFor();
+        const sideBefore = await page.locator('aside').first().boundingBox();
+        await page.getByRole('button', {name: '随机生成', exact: true}).click();
+        await page.getByRole('button', {name: '应用更改', exact: true}).click();
+        await page.getByRole('dialog').waitFor();
+        assert.equal((await page.locator('aside').first().boundingBox())!.y, sideBefore!.y);
+        await page.getByRole('button', {name: /取\s*消/, exact: true}).click();
         let releaseDns: () => void = () => {};
         const enteredDns = new Promise<void>((resolve) => { dnsEntered = resolve; });
         dnsGate = new Promise<void>((resolve) => { releaseDns = resolve; });
         await navigate("/domains");
-        await enteredDns;
+        await Promise.race([enteredDns, new Promise<never>((_resolve, reject) => {
+            const signal = AbortSignal.timeout(15000);
+            signal.addEventListener('abort', () => reject(new Error('DNS resource request was not started')), {once: true});
+        })]);
+        assert.equal(await page.locator('.ant-table-content').evaluateAll((elements) => elements.every((element) => element.scrollWidth <= element.clientWidth + 1)), true);
         assert.equal(await page.getByText(/AUTOMATION_KEY/).count(), 0);
         assert.equal(await page.getByRole("button", {name: /\u65b0\s*\u5efa/}).isDisabled(), true);
         await assertShell();
@@ -1042,6 +1181,7 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.getByRole("table").waitFor();
         await assertShell();
         // DCV 托管设置属于管理员系统设置，未启用时先展示状态，配置后才启用“DCV 托管”验证方式
+        console.log('UI acceptance: system settings');
         await navigate("/admin/system");
         await page.getByText("DCV \u6258\u7ba1\uff08Cloudflare DNS \u4ee3\u7406\uff09", {exact: true}).waitFor();
         await page.getByText("\u672a\u542f\u7528\uff1a\u7533\u8bf7\u9875\u7684\u300cDCV \u6258\u7ba1\u300d\u9a8c\u8bc1\u65b9\u5f0f\u4e0d\u53ef\u9009", {exact: true}).waitFor();
@@ -1057,12 +1197,38 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.screenshot({path: directory + "desktop-admin-system.png", fullPage: true});
         await page.setViewportSize({width: 1440, height: 1000});
         await page.goto(`${base}/#/about`);
+        console.log('UI acceptance: visual alignment');
         await page.getByText("技术栈", {exact: false}).first().waitFor();
         await page.screenshot({path: directory + "desktop-about.png", fullPage: true});
+        const aboutAlignment = await page.locator('.ant-card-head-title').first().evaluate((element) => {
+            const icon = element.querySelector('svg')!.getBoundingClientRect();
+            const text = Array.from(element.childNodes).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim());
+            const range = document.createRange(); range.selectNodeContents(text!);
+            const bounds = range.getBoundingClientRect();
+            return Math.abs((icon.top + icon.bottom - bounds.top - bounds.bottom) / 2);
+        });
+        assert.ok(aboutAlignment < 5);
         await page.goto(`${base}/#/help`);
         await page.getByText("支持的证书品牌", {exact: false}).first().waitFor();
         await page.screenshot({path: directory + "desktop-help.png", fullPage: true});
+        await page.goto(`${base}/#/admin/automation`);
+        await page.getByLabel('固定 cron 调用地址').waitFor();
+        assert.equal(await page.getByRole('switch').count(), 0);
+        assert.equal(await page.getByRole('button').filter({hasText: '立即执行'}).count(), 0);
+        assert.equal(await page.getByText('边缘证书下发', {exact: true}).count(), 0);
+        assert.equal(await page.getByRole('button', {name: '复制调用地址', exact: true}).isEnabled(), true);
+        await page.screenshot({path: directory + 'fixed-cron-maintenance.png', fullPage: true});
         await page.goto(`${base}/#/apply`);
+        console.log('UI acceptance: application');
+        await page.getByPlaceholder('example.com', {exact: true}).waitFor();
+        const shellWidth = (await page.locator('main [class*="shell"]').first().boundingBox())!.width;
+        assert.ok(shellWidth <= 1320);
+        const ip = page.getByText('IP 证书', {exact: true}).locator('..').getByRole('switch');
+        await ip.click();
+        assert.equal(await page.getByText('通配符 (*.)', {exact: true}).locator('..').getByRole('switch').isDisabled(), true);
+        assert.equal(await page.getByText('包含根域名', {exact: true}).locator('..').getByRole('switch').isDisabled(), true);
+        assert.equal(await page.getByText('包含根域名', {exact: true}).isVisible(), true);
+        await ip.click();
         await page.getByPlaceholder("example.com", {exact: true}).fill("example.com");
         await page.getByText("DNS \u8d26\u6237", {exact: true}).click();
         await page.getByRole("combobox").click();
@@ -1147,6 +1313,11 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.getByText('\u5df2\u7b7e\u53d1', {exact: true}).first().waitFor();
         await page.goto(`${base}/#/order/fixture-order`);
         await page.getByText('\u5168\u90e8\u57df\u540d\u5df2\u9a8c\u8bc1', {exact: true}).waitFor();
+        assert.equal(await page.locator('[class*="domainPanelHead"]').evaluateAll((elements) => elements.every((element) => element.tagName === 'DIV' && !element.hasAttribute('aria-expanded'))), true);
+        assert.equal(await page.getByRole('button', {name: '复制ID', exact: true}).count(), 0);
+        const back = (await page.getByRole('button', {name: '返回', exact: true}).boundingBox())!;
+        const refresh = (await page.getByRole('button', {name: '刷新', exact: true}).boundingBox())!;
+        assert.ok(back.x < refresh.x);
         const failed = page.getByRole("row").filter({hasText: "Public Nginx"});
         await failed.getByRole("button", {name: "\u91cd\u8bd5\u6b64\u76ee\u6807"}).click();
         await failed.getByText("\u5df2\u90e8\u7f72", {exact: true}).waitFor({state: "visible"});
@@ -1159,6 +1330,16 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.getByText('\u672a\u8bbe\u7f6e\u81ea\u52a8\u90e8\u7f72\uff0c\u7b7e\u53d1\u540e\u53ef\u4e0b\u8f7d\u8bc1\u4e66\u3002', {exact: true}).waitFor();
         assert.equal(await page.getByRole('table').count(), 0);
         await page.screenshot({path: directory + 'automatic-dns-empty-deployment.png', fullPage: true});
+        await page.getByRole('button', {name: '删除订单', exact: true}).click();
+        await page.getByText(/如需吊销证书，请先进行吊销操作/).waitFor();
+        assert.equal(await page.locator('.ant-modal-confirm-btns button.ant-btn-dangerous').isDisabled(), true);
+        await page.getByPlaceholder('粘贴或输入上方订单 ID').fill('fixture-order');
+        await page.locator('.ant-modal-confirm-btns button.ant-btn-dangerous').click();
+        await page.waitForURL('**/#/certs');
+        const deletion = calls.find((call) => call.path === '/orders/fixture-order')!;
+        assert.equal(deletion.method, 'DELETE');
+        assert.deepEqual(deletion.body, {confirmId: 'fixture-order'});
+        assert.equal(calls.some((call) => call.path.includes('op=cancel') || call.path.includes('op=ca_del')), false);
         await page.goto(`${base}/#/domains`);
         await page.getByRole("button", {name: /\u65b0\s*\u5efa/}).click();
         await page.getByLabel("\u8d26\u6237\u540d", {exact: true}).fill("Local acceptance DNS");
@@ -1248,6 +1429,18 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.getByText("\u8d44\u6e90\u52a0\u8f7d\u5931\u8d25", {exact: true}).waitFor({state: "hidden"});
         await page.setViewportSize({width: 1440, height: 1000});
         await page.goto(`${base}/#/deployments`);
+        await page.getByRole('button', {name: /新\s*建/}).waitFor();
+        await page.getByRole('button', {name: /新\s*建/}).click();
+        await page.getByLabel('类型', {exact: true}).press('ArrowDown');
+        await page.locator('.ant-select-dropdown:visible').getByText('阿里云 ESA', {exact: true}).click();
+        await page.getByText('证书上传至 ESA 站点，无需单独绑定域名', {exact: true}).waitFor();
+        assert.equal(await page.getByLabel('部署哪些域名', {exact: true}).count(), 0);
+        await page.getByLabel('类型', {exact: true}).press('ArrowDown');
+        await page.locator('.ant-select-dropdown:visible').getByText('EdgeOne', {exact: true}).click();
+        await page.getByText('证书先上传腾讯云 SSL 控制台，可选择是否绑定 EdgeOne 域名', {exact: true}).waitFor();
+        assert.equal(await page.getByLabel('加速域名', {exact: true}).count(), 0);
+        await page.screenshot({path: directory + 'cloud-upload-target.png', fullPage: true});
+        await page.getByRole('button', {name: /取\s*消/, exact: true}).click();
         await page.getByRole("button", {name: /\u65b0\s*\u5efa/}).click();
         await page.getByLabel("\u540d\u79f0", {exact: true}).fill("Target defaults");
         assert.equal(await page.getByLabel("\u7aef\u53e3", {exact: true}).inputValue(), "22");
@@ -1605,4 +1798,21 @@ test("background workflow continues automatic DNS, pauses manual input and prese
         assert.equal(recovered.includes('cleanup'), true);
         assert.equal((await dao.getApply('cleanup'))!.flag, 5);
     } finally { _resetDaoForTests(); invalidateAll(); database.close(); }
+});
+
+test('private cloud targets use selected certificates while sharing remains explicitly domain limited', async () => {
+    const storage = new Map<string, string>();
+    const dao: any = {getConf: async (name: string) => storage.get(name) ?? null,
+        upsertConf: async (name: string, value: string) => { storage.set(name, value); }};
+    const secret = Buffer.alloc(32, 9).toString('base64');
+    const user = {mail: 'owner@example.com', is_admin: 1};
+    const resource = await saveResource(dao, secret, 'DEPLOY_TARGET', user,
+        {name: 'ESA upload', provider: 'esa', scopeMode: 'certificate', zones: [], grants: [], config: {site_id: '123'},
+            secrets: {accessKeyId: 'fixture', accessKeySecret: 'fixture'}}, 'esa-cloud');
+    assert.equal(canUse(resource, user.mail, ['a.example.com']), true);
+    assert.equal(canUse(resource, 'other@example.com', ['a.example.com']), false);
+    assert.equal(resourceSelectable({...maskedResource(resource)}, user.mail, ['a.example.com']), true);
+    await assert.rejects(saveResource(dao, secret, 'DEPLOY_TARGET', user, {grants: ['other@example.com']}, resource.id));
+    await assert.rejects(saveResource(dao, secret, 'DEPLOY_TARGET', user,
+        {name: 'forged', provider: 'https', scopeMode: 'certificate', zones: [], grants: [], config: {}, secrets: {}}, 'not-cloud'));
 });

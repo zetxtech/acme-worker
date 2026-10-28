@@ -3,7 +3,6 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Alert, App, Button, Skeleton } from 'antd';
 import {
   ArrowLeft,
-  Copy,
   RefreshCw,
 } from 'lucide-react';
 import PageShell from '@components/Layout/PageShell';
@@ -11,7 +10,6 @@ import Kaomoji from '@components/molecules/Kaomoji';
 import Loading from '@components/molecules/Loading';
 import ConfirmIdContent from '@components/molecules/ConfirmIdContent';
 import RevokeReasonSelect from '@components/molecules/RevokeReasonSelect';
-import { useCopy } from '@hooks/useCopy';
 import { getOrder, operateOrder, RevokeReason } from '@api/order';
 import type { Order, OrderAction } from '@api/types';
 import { FLAG_PULSE, FLAG_COLOR } from '@utils/constants';
@@ -27,7 +25,6 @@ export default function OrderPage() {
   const { uuid } = useParams<{ uuid: string }>();
   const navigate = useNavigate();
   const { message, modal } = App.useApp();
-  const { copy } = useCopy();
 
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
@@ -113,6 +110,9 @@ export default function OrderPage() {
           } else {
             message.warning('文件不存在');
           }
+        } else if (action === 'delete') {
+          message.success('订单已删除');
+          navigate('/certs');
         } else {
           message.info(texts || '已受理，将在后台继续处理');
           await load(true);
@@ -128,7 +128,7 @@ export default function OrderPage() {
       const expectId = opts.requireConfirmId;
       let matched = false;
       const instance = modal.confirm({
-        title: opts.confirm || '危险操作确认',
+        title: action === 'delete' ? '永久删除订单？' : opts.confirm || '危险操作确认',
         icon: null,
         okText: '确认',
         cancelText: '取消',
@@ -136,6 +136,7 @@ export default function OrderPage() {
         okButtonProps: { danger: !!opts.danger, disabled: true },
         content: (
           <div>
+            {action === 'delete' && <p style={{marginBottom: 16, lineHeight: 1.7}}>{opts.confirm}</p>}
             <ConfirmIdContent
               expectId={expectId}
               onMatchChange={(m) => {
@@ -208,10 +209,10 @@ export default function OrderPage() {
         <div className={styles.topActions}>
           <Button
             size="small"
-            icon={<Copy size={12} />}
-            onClick={() => copy(order.uuid, '订单ID已复制')}
+            icon={<ArrowLeft size={12} />}
+            onClick={() => navigate('/certs')}
           >
-            复制ID
+            返回
           </Button>
           <Button
             size="small"
@@ -220,13 +221,6 @@ export default function OrderPage() {
             loading={loading}
           >
             刷新
-          </Button>
-          <Button
-            size="small"
-            icon={<ArrowLeft size={12} />}
-            onClick={() => navigate('/certs')}
-          >
-            返回
           </Button>
         </div>
       </div>
@@ -279,8 +273,9 @@ const ACTION_TIP: Record<string, string> = {
   reload: '正在重新生成验证信息...',
   modify: '正在修改申请，请稍候...',
   cancel: '正在取消订单...',
+  delete: '正在删除订单...',
   re_new: '正在发起续期流程...',
-  edge_push: '正在把证书下发到边缘平台...',
+  edge_push: '正在提交重新部署请求...',
   ca_get: '正在下载证书...',
   ca_key: '正在下载密钥...',
   ca_del: '正在吊销证书...',

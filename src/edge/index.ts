@@ -25,6 +25,8 @@ import {sha256Hex, sslCall, teoCall} from "./tencent";
 export type EdgeTargetType = "edgeone" | "esa";
 
 export interface EdgeOneConfig {
+    mode?: 'upload' | 'bind';
+    certificate_id?: string;
     /** 腾讯云 SecretId */
     secret_id: string;
     /** 腾讯云 SecretKey */
@@ -40,6 +42,7 @@ export interface EdgeOneConfig {
 }
 
 export interface EsaConfig {
+    certificate_id?: string;
     /** 阿里云 AccessKeyId */
     access_key_id: string;
     /** 阿里云 AccessKeySecret */
@@ -223,6 +226,13 @@ function baseDomain(domain: string): string {
 /* ============================ 目标下发 ============================ */
 
 interface DeployContext {
+    certificateFamily?: 'rsa' | 'ec';
+    previousCertificateId?: string;
+    uploadedCertificateId?: string;
+    migrationId?: number;
+    migrationComplete?: boolean;
+    onUploaded?: (id: string) => Promise<void>;
+    onMigration?: (id: number, complete: boolean) => Promise<void>;
     hostAllowed?: (host: string) => boolean;
     order: any;
     uuid: string;
@@ -234,9 +244,38 @@ interface DeployContext {
 /** 腾讯云 EdgeOne：上传证书 + 部署到加速域名 */
 async function deployEdgeOne(
     env: Bindings, target: EdgeTarget, ctx: DeployContext, hash: string,
-): Promise<{certId?: string; hosts: string[]; detail: string}> {
+): Promise<{certId?: string; hosts: string[]; detail: string; pending?: boolean}> {
     const cfg = target.edgeone ?? {secret_id: "", secret_key: ""};
     const cred = {secretId: cfg.secret_id, secretKey: cfg.secret_key, region: cfg.region};
+
+    let certId = ctx.uploadedCertificateId;
+    if (!certId) {
+        const uploaded = await sslCall(cred, 'UploadCertificate', {CertificatePublicKey: ctx.cert, CertificatePrivateKey: ctx.key,
+            CertificateType: 'SVR', Alias: `${cfg.alias || 'certhub'}-${ctx.uuid}-${hash.slice(0, 8)}`, Repeatable: false});
+        certId = String(uploaded.CertificateId || uploaded.RepeatCertId || '');
+        if (!certId) throw new Error('Tencent SSL did not return a certificate ID');
+        await ctx.onUploaded?.(certId);
+    }
+    const oldId = ctx.previousCertificateId || cfg.certificate_id;
+    if (oldId && oldId !== certId && !ctx.migrationComplete) {
+        let task = ctx.migrationId;
+        if (!task) {
+            const update = await sslCall(cred, 'UpdateCertificateInstance', {OldCertificateId: oldId,
+                CertificateId: certId, ResourceTypes: ['teo']});
+            task = Number(update.DeployRecordId);
+            if (!task) return {certId, hosts: [], pending: true, detail: '正在建立腾讯云旧证书关联更新任务'};
+            await ctx.onMigration?.(task, false);
+        }
+        const progress = await sslCall(cred, 'DescribeHostUpdateRecordDetail', {DeployRecordId: String(task), Limit: '200', Offset: '0'});
+        if (Number(progress.FailedTotalCount) > 0) throw new Error('腾讯云旧证书关联更新失败，请检查 SSL 控制台更新记录');
+        const total = Number(progress.TotalCount);
+        const noBindings = progress.TotalCount === 0 && progress.RunningTotalCount === 0 && progress.PendingTotalCount === 0;
+        if (!noBindings && !(total > 0 && Number(progress.SuccessTotalCount) === total && !Number(progress.PendingTotalCount) && !Number(progress.RunningTotalCount))) {
+            return {certId, hosts: [], pending: true, detail: '腾讯云正在更新原有证书关联'};
+        }
+        await ctx.onMigration?.(task, true);
+    }
+    if (cfg.mode === 'upload') return {certId, hosts: [], detail: `已上传腾讯云 SSL 控制台（CertId ${certId}）`};
 
     // 1) 站点 ID ------------------------------------------------------------
     let zoneId = String(cfg.zone_id ?? "").trim();
@@ -276,25 +315,23 @@ async function deployEdgeOne(
     }
     if (ctx.hostAllowed && hosts.some((host) => !ctx.hostAllowed!(host))) throw new Error("EdgeOne host is not covered by the selected certificate");
 
-    // 3) 上传证书 -----------------------------------------------------------
-    const alias = `${cfg.alias || "certhub"}-${hash.slice(0, 8)}`;
-    const uploaded = await sslCall(cred, "UploadCertificate", {
-        CertificatePublicKey: ctx.cert,
-        CertificatePrivateKey: ctx.key,
-        CertificateType: "SVR",
-        Alias: alias,
-        Repeatable: false,
-    });
-    const certId = String(uploaded?.CertificateId || uploaded?.RepeatCertId || "");
-    if (!certId) throw new Error("腾讯云未返回 CertId");
-
-    // 4) 部署到加速域名 -----------------------------------------------------
-    await teoCall(cred, "ModifyHostsCertificate", {
-        ZoneId: zoneId,
-        Hosts: hosts,
-        Mode: "sslcert",
-        ServerCertInfo: [{CertId: certId}],
-    });
+    if (hosts.length > 20) throw new Error('一次部署最多绑定 20 个域名，请拆分目标');
+    const current = await teoCall(cred, 'DescribeHostsSetting', {ZoneId: zoneId, Limit: 1000,
+        Filters: [{Name: 'host', Values: hosts}]});
+    for (const host of hosts) {
+        const settings = current.DetailHosts?.find((entry: any) => entry.Host === host);
+        if (!settings) throw new Error('无法读取域名的现有证书配置，已保留原有关联');
+        const certificates = [{CertId: certId}];
+        for (const existing of settings.Https?.CertInfo ?? []) {
+            if (existing.CertId === certId || existing.CertId === oldId) continue;
+            const algorithm = String(existing.SignAlgo ?? '').toLowerCase();
+            const family = /ecdsa|ecc|ecpublic/.test(algorithm) ? 'ec' : /rsa/.test(algorithm) ? 'rsa' : undefined;
+            if (!family) throw new Error('无法确认原证书算法，已保留原有关联；请检查 SSL 控制台');
+            if (family !== ctx.certificateFamily) certificates.push({CertId: existing.CertId});
+        }
+        if (certificates.length > 2) throw new Error('原有证书关联数量异常，未覆盖');
+        await teoCall(cred, 'ModifyHostsCertificate', {ZoneId: zoneId, Hosts: [host], Mode: 'sslcert', ServerCertInfo: certificates});
+    }
     return {
         certId, hosts,
         detail: `站点 ${zoneId}，已部署 ${hosts.length} 个加速域名（CertId ${certId}）`,
@@ -340,6 +377,7 @@ async function deployEsa(
             action: "SetCertificate", version: "2024-09-10",
             params: {
                 SiteId: siteId,
+                Id: ctx.previousCertificateId || cfg.certificate_id || undefined,
                 Type: "upload",
                 Name: certName,
                 Certificate: ctx.cert,
@@ -347,6 +385,8 @@ async function deployEsa(
             },
         });
         const certId = String(res?.Id ?? "");
+        if (!certId) throw new Error('ESA did not return a certificate ID');
+        await ctx.onUploaded?.(certId);
         return {
             certId,
             hosts: [],
@@ -354,9 +394,8 @@ async function deployEsa(
         };
     } catch (e: any) {
         const msg = String(e?.message ?? e);
-        // 同一张证书重复上传时按成功处理，保证幂等
         if (msg.includes("Certificate.Duplicated")) {
-            return {hosts: [], detail: `站点 ${siteId}，同名证书已存在（${certName}）`};
+            throw new Error('ESA 存在同名证书，无法确认已更新；请填写已有证书 ID 后重试');
         }
         throw e;
     }
@@ -364,7 +403,7 @@ async function deployEsa(
 
 export async function deployTarget(
     env: Bindings, target: EdgeTarget, ctx: DeployContext, hash: string,
-): Promise<{certId?: string; hosts: string[]; detail: string}> {
+): Promise<{certId?: string; hosts: string[]; detail: string; pending?: boolean}> {
     if (target.type === "edgeone") return await deployEdgeOne(env, target, ctx, hash);
     if (target.type === "esa") return await deployEsa(env, target, ctx, hash);
     throw new Error(`未知的下发目标类型: ${(target as any).type}`);

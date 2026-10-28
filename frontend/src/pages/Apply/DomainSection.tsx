@@ -144,31 +144,30 @@ export default function DomainSection({
                     onChange={(c) => updateRow(d.id, {
                       isIP: c,
                       // 勾选IP证书时：强制WEB验证、禁用通配符
-                      ...(c ? { wildcard: false, includeRoot: false, verification: 'web-self' as const } : {}),
+                      ...(c ? { wildcard: false, includeRoot: false, verification: 'web-self' as const }
+                        : {wildcard: defaultRow().wildcard, includeRoot: defaultRow().includeRoot, verification: defaultRow().verification}),
                     })}
                   />
                   <span>IP 证书</span>
                 </label>
-                {!d.isIP && (
                   <label className={styles.switchLabel}>
                     <Switch
                       size="small"
+                      disabled={d.isIP}
                       checked={d.wildcard}
                       onChange={(c) => updateRow(d.id, { wildcard: c })}
                     />
                     <span>通配符 (*.)</span>
                   </label>
-                )}
-                {!d.isIP && (
                   <label className={styles.switchLabel}>
                     <Switch
                       size="small"
+                      disabled={d.isIP}
                       checked={d.includeRoot}
                       onChange={(c) => updateRow(d.id, { includeRoot: c })}
                     />
                     <span>包含根域名</span>
                   </label>
-                )}
               </div>
 
               <Segmented
@@ -190,7 +189,7 @@ export default function DomainSection({
                   options={dnsAccounts.map((account) => ({value: account.id, label: `${account.name} (${account.provider})`,
                     disabled: !resourceSelectable(account, email, d.domain ? [d.domain] : [])}))}
                   onChange={(id) => updateRow(d.id, {dnsAccountId: id})}/>
-                <Link to="/domains">管理域名资源</Link>
+                <Link to="/domains">管理 DNS 验证账号</Link>
               </div>}
               {d.verification === 'dns-self' && <Alert style={{marginTop: 12}} type="info" showIcon message="手动 TXT 需要在每次续期时更新记录"/>}
             </motion.div>

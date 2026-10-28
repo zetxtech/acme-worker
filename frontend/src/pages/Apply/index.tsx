@@ -374,7 +374,7 @@ export default function Apply() {
   };
 
   return (
-    <PageShell>
+    <PageShell maxWidth={1320}>
       {editId && <Alert type={loadFailed ? 'error' : 'info'} showIcon style={{marginBottom: 20}}
         message={loadFailed ? '未能读取原申请，尚未保存更改' : '编辑申请'}
         description="保存前不会更改或删除原申请；取消编辑后恢复后台处理。"

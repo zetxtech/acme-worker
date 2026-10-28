@@ -12,7 +12,7 @@ export interface Resource {
     owner: string;
     grants: string[];
     zones: string[];
-    scopeMode?: "zones" | "account";
+    scopeMode?: "zones" | "account" | 'certificate';
     enabled: boolean;
     config: Record<string, any>;
     encrypted: string;
@@ -66,6 +66,8 @@ export function accountScope(resource: Resource): boolean {
 export function canUse(resource: Resource, mail: string, domains: string[] = []): boolean {
     const owner = resource.owner === mail.toLowerCase();
     if (accountScope(resource)) return resource.enabled && owner;
+    if (resource.kind === 'DEPLOY_TARGET' && ['edgeone', 'esa'].includes(resource.provider) && resource.scopeMode === 'certificate'
+        && !resource.zones.length && !resource.grants.length) return resource.enabled && owner;
     return resource.enabled && resource.zones.length > 0 && (owner || resource.grants.includes(mail.toLowerCase()))
         && domains.every((domain) => inScope(domain, resource.zones));
 }
@@ -101,8 +103,10 @@ export async function saveResource(dao: Dao, secret: string | undefined, kind: R
     if (!name || name.length > 100) throw new Error("Resource name must be 1 to 100 characters");
     const zones = body.zones ?? existing?.zones;
     const scopeMode = body.scopeMode ?? existing?.scopeMode ?? "zones";
-    if (!["zones", "account"].includes(scopeMode) || kind !== "DNS_ACCOUNT" && scopeMode !== "zones") throw new Error("Invalid resource scope mode");
-    if (!Array.isArray(zones) || zones.length > 100 || (!zones.length && scopeMode !== "account")) throw new Error("Explicit domain scopes are required");
+    const certificateScope = scopeMode === 'certificate' && kind === 'DEPLOY_TARGET' && ['edgeone', 'esa'].includes(provider);
+    if (!["zones", "account", 'certificate'].includes(scopeMode) || kind !== "DNS_ACCOUNT" && scopeMode !== "zones" && !certificateScope) throw new Error("Invalid resource scope mode");
+    if (!Array.isArray(zones) || zones.length > 100 || (!zones.length && scopeMode !== "account" && !certificateScope)) throw new Error("Explicit domain scopes are required");
+    if (certificateScope && zones.length) throw new Error('Private cloud target must use selected certificate scope');
     if (scopeMode === "account" && zones.length) throw new Error("Account scope must not include zone restrictions");
     const normalizedZones = zones.length ? requestedNames(zones.map((zone) => ({name: String(zone)}))) : [];
     if (normalizedZones.some((zone) => zone.startsWith("*."))) throw new Error("Zone scopes must not include wildcards");
@@ -113,7 +117,7 @@ export async function saveResource(dao: Dao, secret: string | undefined, kind: R
     if (Number(actor.is_admin) !== 1 && JSON.stringify(grants) !== JSON.stringify(existing?.grants ?? [])) {
         throw new Error("Only administrators may share resources");
     }
-    if (scopeMode === "account" && grants.length) throw new Error("Shared resources require explicit domain scopes");
+    if (["account", 'certificate'].includes(scopeMode) && grants.length) throw new Error("Shared resources require explicit domain scopes");
     const config = body.config ?? existing?.config ?? {};
     if (!config || Array.isArray(config) || typeof config !== "object" || JSON.stringify(config).length > 16000) {
         throw new Error("Invalid resource configuration");
@@ -127,7 +131,7 @@ export async function saveResource(dao: Dao, secret: string | undefined, kind: R
     if (kind === "DNS_ACCOUNT") validateDnsSettings(provider, config, credentials);
     else validateResourceConfig(provider, config, credentials);
     if (body.enabled !== undefined && typeof body.enabled !== "boolean") throw new Error("Invalid enabled state");
-    if (provider === "edgeone" && config.hosts?.some((host: string) => !inScope(host, normalizedZones))) throw new Error("EdgeOne hosts outside domain scope");
+    if (provider === "edgeone" && !certificateScope && config.hosts?.some((host: string) => !inScope(host, normalizedZones))) throw new Error("EdgeOne hosts outside domain scope");
     const resource: Resource = {id, kind, name, provider, owner: existing?.owner ?? actor.mail.toLowerCase(),
         grants: grants.map((mail: string) => mail.toLowerCase()), zones: normalizedZones, scopeMode,
         enabled: body.enabled ?? existing?.enabled ?? true, config,

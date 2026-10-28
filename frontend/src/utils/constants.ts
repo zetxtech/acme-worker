@@ -121,7 +121,7 @@ export const AUTH_ACT_MAP: Record<string, string> = {
   ca_key: '下载密钥',
   re_new: '续期证书',
   rm_key: '删除密钥',
-  edge_push: '边缘下发',
+  edge_push: '重新部署',
   ca_del: '吊销证书',
 };
 

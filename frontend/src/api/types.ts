@@ -91,6 +91,7 @@ export type OrderAction =
   | 'reload'
   | 'modify'
   | 'cancel'
+  | 'delete'
   | 'single'
   | 'process'
   | 'ca_get'

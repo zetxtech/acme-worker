@@ -18,7 +18,7 @@ import {readConf} from "./db/conf";
 import {currentUser} from "./middleware/admin";
 import {mountResourceRoutes} from "./routes/resources";
 import {validateSelections} from "./resources";
-import {queueOrder, readOrderWork, validatedEdit, type OrderWork} from "./order-workflow";
+import {deleteSavedOrder, queueOrder, readOrderWork, validatedEdit, type OrderWork} from "./order-workflow";
 
 // 绑定数据 ###############################################################################
 // DB_SOURCE：空/d1 → Cloudflare D1；mysql → mysql2；prisma → PrismaClient
@@ -30,6 +30,7 @@ export type Bindings = {
     DB_MYSQL_USER?: string, DB_MYSQL_PASS?: string, DB_MYSQL_NAME?: string,
     DATABASE_URL?: string,
     AUTOMATION_KEY?: string,
+    CRON_TOKEN?: string,
     ORDER_WORKFLOW?: DurableObjectNamespace,
     // 邮件 / 站点 / 鉴权 -------------------------------------------
     MAIL_KEYS: string, MAIL_SEND: string, AUTH_KEYS: string, SITE_KEYS?: string,
@@ -161,6 +162,21 @@ app.use('/apply/', async (c: Context): Promise<Response> => {
         return c.json({"flags": 3, "texts": "请求数据无效: " + error}, 400);
     }
 })
+
+app.delete('/orders/:uuid', async (c) => {
+    const user = await currentUser(c);
+    if (!user) return c.json({flags: 2, texts: '用户尚未登录'}, 401);
+    const uuid = c.req.param('uuid');
+    const dao = await (await import('./db')).ensureDao(c.env);
+    const row = await dao.getApply(uuid);
+    if (!row || row.mail.toLowerCase() !== user.mail.toLowerCase()) return c.json({flags: 9, texts: '申请不存在'}, 404);
+    const body = await c.req.json().catch(() => ({}));
+    if (body.confirmId !== uuid) return c.json({flags: 3, texts: '请输入完整订单 ID 以确认'}, 400);
+    try {
+        await deleteSavedOrder(c.env, uuid, user.mail, body.confirmId);
+        return c.json({flags: 0, texts: '本站记录已永久删除，证书未被吊销'});
+    } catch { return c.json({flags: 3, texts: '暂时无法安全删除，可能仍在处理或验证记录清理失败；原记录已保留，请稍后重试'}, 409); }
+});
 
 app.post('/apply/:uuid/edit', async (c) => {
     if (!await users.userAuth(c)) return c.json({flags: 2, texts: '用户尚未登录'}, 401);
@@ -307,26 +323,19 @@ app.use('/order/', async (c: Context): Promise<Response> => {
             } else if (order_acts === "ca_key") {
                 order_acts = order_data[0].keys;
             } else if (order_acts === "edge_push") {
-                // 手动把当前证书重新下发到所有启用的边缘平台
-                const {pushOrder} = await import("./edge");
-                const results = await pushOrder(c.env as Bindings, order_data[0], {manual: true});
-                const failed = results.filter((r: any) => r.status === "fail");
-                if (failed.length) {
-                    return c.json({
-                        "flags": 10, "texts": "边缘下发失败: " + failed[0].detail,
-                        "order": order_acts, "results": results,
-                    }, 400);
+                if (Number(order_data[0].flag) !== 5) return c.json({flags: 3, texts: '证书尚未签发'}, 409);
+                const dao = await (await import('./db')).ensureDao(c.env);
+                const ids = JSON.parse(await dao.getConf(`ORDER_DEPLOYMENT:${order_uuid}`) ?? '[]');
+                if (!ids.length) return c.json({flags: 3, texts: '请先选择部署目标'}, 400);
+                for (const id of ids) {
+                    const key = `DEPLOY_STATE:${order_uuid}:${id}`;
+                    const previous = JSON.parse(await dao.getConf(key) ?? 'null');
+                    if (previous?.status === 'running') continue;
+                    await dao.upsertConf(key, JSON.stringify({...previous, targetId: id, name: previous?.name ?? id,
+                        status: 'pending', attempts: 0, nextAttempt: 0, detail: '已安排重新部署', updatedAt: Date.now()}), Date.now());
                 }
-                if (results.length === 0) {
-                    return c.json({
-                        "flags": 11, "texts": "没有匹配的边缘下发目标，请先在自动化页面添加",
-                        "order": order_acts,
-                    }, 400);
-                }
-                return c.json({
-                    "flags": 0, "texts": "边缘证书下发完成", "order": order_acts,
-                    "results": results,
-                }, 200);
+                await queueOrder(c.env, order_uuid, 'deploy');
+                return c.json({flags: 0, texts: '已安排后台重新部署', order: order_acts}, 202);
             } else if (order_acts === "rm_key") {
                 await saves.updateDB(c.env.DB_CF, "Apply", {keys: ""}, {uuid: order_uuid})
             } else if (order_acts === "ca_del") {
@@ -394,14 +403,12 @@ app.get('/exits/', async (c: Context): Promise<Response> => {
 
 // 定时任务 ###############################################################################
 app.get('/tests/', async (c: Context): Promise<Response> => {
-    let result: any[] = await certs.Processing(c.env);
-    return c.json(result)
+    return c.json({flags: 9, texts: '请使用受认证的 /cron 维护入口'}, 410);
 })
 
 // 定时任务 ###############################################################################
 app.get('/tasks/', async (c: Context): Promise<Response> => {
-    let result: any[] = await certs.Processing(c.env);
-    return c.json(result)
+    return c.json({flags: 9, texts: '请使用受认证的 /cron 维护入口'}, 410);
 })
 
 // 更新密钥 ###############################################################################
@@ -438,8 +445,7 @@ app.use('/token/', async (c: Context): Promise<Response> => {
 
 // 定时任务 ###############################################################################
 app.use('/clean/', async (c: Context): Promise<Response> => {
-    const result: Record<string, any> = await cleanDNS(c.env);
-    return c.json({"flag": result.flag, "text": result.text})
+    return c.json({flags: 9, texts: '清理已由后台自动维护'}, 410);
 })
 
 // 获取证书 ###############################################################################

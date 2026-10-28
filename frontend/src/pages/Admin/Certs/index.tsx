@@ -436,7 +436,7 @@ export default function AdminCertsPage() {
             setPageSize(s);
           },
         }}
-        scroll={{ x: 1200 }}
+        scroll={data.length ? { x: 1200 } : undefined}
       />
 
       {/* 修改状态弹窗 =============================================== */}

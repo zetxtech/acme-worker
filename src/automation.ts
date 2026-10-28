@@ -48,9 +48,9 @@ export const JOBS: JobDef[] = [
         desc: "扫描已开启自动续期、且临近到期的证书并重新签发。",
     },
     {
-        id: "edge-sync",
-        title: "边缘证书补下发",
-        desc: "把已签发但未下发或下发失败的证书重新推送到 EdgeOne / ESA。",
+        id: "deploy",
+        title: "部署目标同步",
+        desc: "重试订单已选择的部署目标。",
     },
     {
         id: "clean-dns",
@@ -161,7 +161,6 @@ async function jobRenew(env: Bindings): Promise<string> {
         }
         // 复用前端"续期"按钮的路径：回到 flag=0 后重新走签发流程，
         // 旧证书保留到新证书签发成功为止，避免续期失败导致服务中断。
-        await saves.updateDB(env.DB_CF!, "Apply", {flag: 0}, {uuid: row.uuid});
         try {
             await (await import("./order-workflow")).queueOrder(env, row.uuid, "retry");
             renewed += 1;
@@ -175,12 +174,8 @@ async function jobRenew(env: Bindings): Promise<string> {
 }
 
 async function jobEdgeSync(env: Bindings): Promise<string> {
-    const res = await syncEdgeCertificates(env, {});
     const selected = await (await import("./deployment")).syncSelectedOrders(env);
-    const failed = res.results.filter((r) => r.status === "fail");
-    let detail = `检查 ${res.checked} 个已签发订单，成功下发 ${res.pushed} 次；订单目标成功 ${selected} 次`;
-    if (failed.length) detail += `，失败 ${failed.length} 次：${failed[0].detail}`;
-    return detail;
+    return `订单目标成功 ${selected} 次`;
 }
 
 async function jobCleanDns(env: Bindings): Promise<string> {
@@ -199,7 +194,7 @@ async function runJob(env: Bindings, job: string, opts: RunOptions = {}): Promis
         if (job === "cron") detail = await jobCron(env, opts);
         else if (job === "process") detail = await jobProcess(env);
         else if (job === "renew") detail = await jobRenew(env);
-        else if (job === "edge-sync") detail = await jobEdgeSync(env);
+        else if (job === "deploy") detail = await jobEdgeSync(env);
         else if (job === "clean-dns") detail = await jobCleanDns(env);
         else throw new Error(`未知任务: ${job}`);
         return {job, status: "ok", detail};
@@ -216,25 +211,21 @@ async function runJob(env: Bindings, job: string, opts: RunOptions = {}): Promis
  * force 为 true 时忽略开关与节流，直接按任务清单执行。
  */
 export async function jobCron(env: Bindings, opts: RunOptions = {}): Promise<string> {
-    const enabled = await readBool(env as any, "SCHEDULE_ENABLED", false);
-    if (!enabled && !opts.force) {
-        return "定时触发未启用（可在「自动任务」中开启，或调用时带 force=1 强制执行）";
-    }
-    const interval = Math.max(1, await readInt(env as any, "SCHEDULE_INTERVAL_MINUTES", 60));
-    const last = await readInt(env as any, SCHEDULE_STATE_KEY, 0);
-    if (!opts.force && Date.now() - last < interval * 60_000) {
-        const wait = Math.ceil((interval * 60_000 - (Date.now() - last)) / 60_000);
-        return `距上次执行不足 ${interval} 分钟，本次跳过（约 ${wait} 分钟后可再次执行）`;
-    }
-    const csv = (await readConf(env as any, "SCHEDULE_JOBS")) ?? "process,renew,edge-sync";
-    const jobs = csv.split(",").map((s) => s.trim()).filter((j) => JOB_IDS.includes(j));
+    const dao = await (await import('./db')).ensureDao(env);
+    const token = crypto.randomUUID();
+    if (!dao.claimConfLease || !dao.releaseConfLease) throw new Error('Maintenance locking unavailable');
+    if (!await dao.claimConfLease('CRON_LEASE', token, Date.now() + 300000, Date.now())) return '维护任务已在后台运行';
+    try {
+    const jobs = ['process', 'renew', 'deploy', 'clean-dns'];
     const out = await runJobs(env, jobs, "cron", {skipLog: true});
     await writeConf(env as any, SCHEDULE_STATE_KEY, String(Date.now()));
     await appendLog(env, {
         t: Date.now(), kind: "cron", status: out.status,
-        detail: (opts.force ? "[force] " : "") + out.detail,
+        detail: out.detail,
     });
+    if (out.status === 'fail') throw new Error('Background maintenance did not complete');
     return out.detail;
+    } finally { await dao.releaseConfLease('CRON_LEASE', token); }
 }
 
 /** 依次执行若干任务（renew 依赖 process 的结果，因此保持串行） */

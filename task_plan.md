@@ -1,5 +1,13 @@
 # Worker Certificate Workflow Implementation Plan
 
+## Current Work: Certificate Management Cleanup (2026-10-28)
+- Released: 3b405e53-aa9b-48c1-b177-84ee6e065efb. All implementation and acceptance gates passed (45/45 full tests, frontend build, actual Worker release, live health/credential/artifact verification). Existing external monitor migration was refused on destination mismatch and left unchanged; the old alias preserves its operation. Real cloud-account writes remain untested without a supplied target. Source ready for final commit/push.
+- Separate permanent record deletion from cancellation/revocation; require exact ID and ownership, remove only owned challenge records and order-local state under the execution lock.
+- Simplify operational surfaces: one fixed authenticated cron endpoint; deployment targets replace global edge targets; no manual trigger/job switches. Preserve the existing scheduler credential while migrating its monitor URL.
+- Cloud deployment: verify official ESA upload/replacement semantics and Tencent SSL certificate update/link behavior before implementing; make EdgeOne host binding optional.
+- UI: stable modal scroll, no empty/loading table horizontal bars, constrained application width, disabled IP-incompatible switches, always-open account panels, DNS validation account naming, confirmed domains not expandable, horizontal icon/text alignment and order navigation placement.
+- Gates: focused regression after each slice, complete browser/runtime suite, build/dry-run, live health and signed-artifact preservation, commit and authorized push. No WSL or VS Code Tasks.
+
 ## Current Work: Background Certificate Lifecycle (2026-10-27)
 - Implemented: order acceptance independent of CA/DNS latency; durable server-side continuation and retries; request identity preserved during edits; detail/list synchronization without keeping the tab open; post-issuance cleanup continuation.
 - Final acceptance: 40/40 lifecycle tests with zero skipped, including actual workerd alarms and SSH/SFTP and browser scenarios; production frontend build and complete Worker binding/bundle checks passed. Publisher retry/binding tests passed 6/6.

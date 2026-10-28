@@ -514,24 +514,6 @@ export async function getCerts(env: Bindings, order_user: any, order_info: any) 
         await saves.updateDB(env.DB_CF, "Apply", {next: timestamp}, {uuid: order_info['uuid']})
         await saves.updateDB(env.DB_CF, "Apply", {text: "恭喜！证书已成功签发"}, {uuid: order_info['uuid']})
         // await saves.updateDB(env.DB, "Apply", {data: ""}, {uuid: order_info['uuid']})
-        // 边缘证书自动下发：签发（含自动续期）成功后同步到 EdgeOne / ESA。
-        // 下发失败不影响签发结果，只把原因追加到订单备注，后续可由触发器任务补下发。
-        try {
-            const {pushOrder} = await import("./edge");
-            const fresh: any = (await saves.selectDB(
-                env.DB_CF, "Apply", {uuid: {value: order_info['uuid']}}))[0];
-            const results = await pushOrder(env, fresh, {});
-            const failed = results.filter((r: any) => r.status === "fail");
-            if (results.length > 0) {
-                const ok = results.filter((r: any) => r.status === "ok").length;
-                let note = `边缘证书下发：成功 ${ok} 个`;
-                if (failed.length) note += `，失败 ${failed.length} 个（${failed[0].detail}）`;
-                await saves.updateDB(env.DB_CF, "Apply",
-                    {text: "恭喜！证书已成功签发；" + note}, {uuid: order_info['uuid']});
-            }
-        } catch (e) {
-            console.error("edge push after issuance failed:", e);
-        }
         try {
             const fresh = await (await ensureDao(env)).getApply(order_info.uuid);
             if (fresh) await (await import("./deployment")).pushSelectedOrder(env, fresh);

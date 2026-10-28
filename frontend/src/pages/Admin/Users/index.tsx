@@ -367,7 +367,7 @@ export default function AdminUsersPage() {
             setPageSize(s);
           },
         }}
-        scroll={{ x: 1000 }}
+        scroll={data.length ? { x: 1000 } : undefined}
       />
 
       {/* 编辑抽屉 ===================================================== */}

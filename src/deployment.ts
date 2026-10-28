@@ -7,6 +7,7 @@ import {deployTarget, orderDomains} from "./edge";
 import {deployHook} from "./deploy/hook";
 import {deploySsh} from "./deploy/ssh";
 import {validateResourceConfig} from "./deploy/config";
+import {X509Certificate} from 'node:crypto';
 
 export interface DeploymentState {
     targetId: string;
@@ -42,8 +43,23 @@ async function execute(env: Bindings, target: Resource, secrets: Record<string, 
     const edgeTarget: any = {id: target.id, name: target.name, type: target.provider, enabled: true, auto: true, domains,
         edgeone: {...target.config, secret_id: secrets.secretId, secret_key: secrets.secretKey},
         esa: {...target.config, access_key_id: secrets.accessKeyId, access_key_secret: secrets.accessKeySecret}};
-    await deployTarget(env, edgeTarget, {order, uuid: order.uuid, domains, cert: order.cert, key: order.keys,
+    const certificate = new X509Certificate(order.cert);
+    const family = certificate.publicKey.asymmetricKeyType;
+    if (!['rsa', 'ec'].includes(family ?? '') || certificate.publicKey.asymmetricKeyDetails?.namedCurve === 'SM2') throw new Error('该云部署仅支持 RSA 或 ECC 证书');
+    const dao = await ensureDao(env);
+    const remoteKey = `CLOUD_CERT:${order.uuid}:${target.id}:${family}`;
+    const stored = JSON.parse(await dao.getConf(remoteKey) ?? 'null');
+    const state: any = stored?.version === version ? stored : {version, previousId: stored?.id || target.config.certificate_id, startedAt: Date.now()};
+    if (state.taskId && Date.now() - state.startedAt > 20 * 60000) throw new Error('云平台证书关联更新超时，请检查更新记录后重试');
+    const persist = async () => dao.upsertConf(remoteKey, JSON.stringify(state), Date.now());
+    const result = await deployTarget(env, edgeTarget, {order, uuid: order.uuid, domains, cert: order.cert, key: order.keys,
+        certificateFamily: family as 'rsa' | 'ec',
+        previousCertificateId: target.provider === 'esa' ? state.id || state.previousId : state.previousId, uploadedCertificateId: state.id,
+        migrationId: state.taskId, migrationComplete: state.migrated,
+        onUploaded: async (id) => { state.id = id; await persist(); },
+        onMigration: async (id, complete) => { state.taskId = id; state.migrated = complete; await persist(); },
         hostAllowed: (host) => domains.some((domain) => certificateCoversHost(domain, host))}, version);
+    return result;
 }
 
 export async function deploymentStates(dao: Dao, orderId: string): Promise<DeploymentState[]> {
@@ -100,9 +116,11 @@ export async function pushSelectedOrder(env: Bindings, order: any, options: {tar
             await dao.upsertConf(stateKey, JSON.stringify(state), Date.now());
             const secrets = await unseal(env.AUTOMATION_KEY, `DEPLOY_TARGET:${id}`, target.encrypted);
             try {
-                await executor(env, target, secrets, order, version);
-                state.status = "ok";
-                state.detail = "Certificate deployed";
+                const result = await executor(env, target, secrets, order, version);
+                const cloud = result as {pending?: boolean; detail?: string} | undefined;
+                state.status = cloud?.pending ? 'pending' : 'ok';
+                state.detail = cloud?.detail || '证书已部署';
+                if (cloud?.pending) state.attempts = previous?.attempts ?? 0;
             } catch (error) {
                 state.status = "fail";
                 let detail = (error as Error).message;
@@ -112,7 +130,7 @@ export async function pushSelectedOrder(env: Bindings, order: any, options: {tar
         } catch { state.status = "fail"; state.detail = "Credential decryption or deployment initialization failed"; }
         finally {
             state.updatedAt = Date.now();
-            state.nextAttempt = state.status === "fail" ? Date.now() + Math.min(3600000, 30000 * 2 ** Math.min(state.attempts, 7)) : 0;
+            state.nextAttempt = state.status === 'pending' ? Date.now() + 15000 : state.status === "fail" ? Date.now() + Math.min(3600000, 30000 * 2 ** Math.min(state.attempts, 7)) : 0;
             await dao.upsertConf(stateKey, JSON.stringify(state), Date.now());
             await dao.releaseConfLease(lease, token);
         }
