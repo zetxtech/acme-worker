@@ -168,3 +168,18 @@
 - Dependency provenance remains unresolved, so package.json and package-lock.json were deliberately left unchanged. The retained npm logs show npm --prefix <CFWorkerACME> install --save-dev @types/ssh2 --ignore-scripts at 2026-10-20T18:43:24Z and the equivalent playwright-core install at 19:13:15Z, both launched from Clawer_Software. Both logs already include clawer-software in the audit tree, but neither records its introduction. Available indexed session history did not establish the first introducing command; concurrent user modification cannot be excluded.
 - The existing SSH task failed with a PowerShell parsing error and the old 8793 endpoint returned 502. A separate local-only 8795 probe was started for the full test run, then stopped after success. Main Worker 8794 and UI 5194 were retained for the user's final inspection; both returned HTTP 200 before the rerun. No application account was initialized.
 - This recheck intentionally does not claim production DNS/CA/user-host acceptance or a clean repository-wide TypeScript baseline.
+## 部署目标类型归集与群晖支持（2026-10-28）
+- 目标类型收敛为 SSH / SFTP、群晖 (Synology)、HTTP / HTTPS、EdgeOne、阿里云 ESA；Nginx 与 Traefik 成为 SSH / SFTP 的“部署方式”（sftp / nginx / traefik），旧 provider=nginx|traefik 资源仍可编辑与部署，下拉框仅在编辑旧资源时保留其名称。
+- 部署目标不再要求填写“部署哪些域名”：`scopeMode=certificate` 现在对所有目标生效，表示只对本人生效的“所选证书”，订单域名不再参与目标范围校验；共享目标仍在高级设置里显式限制域名。
+- SSH 端口改为必填，主机 SHA256 指纹可选（填写时严格校验，sftp 部署仅在有指纹时启用 hostVerifier）；检查命令与重载命令允许多行 shell，长度上限 2000→4000。
+- 新增前端 ShellCommand 组件：透明 textarea 叠加高亮 pre，白底、与普通输入框一致的边框圆角，支持多行与 bash 关键字/变量/字符串/注释/操作符配色，未引入第三方编辑器依赖。
+- ~~群晖目标写入 system/default 的 fullchain/cert/privkey，并同步 _archive/DEFAULT 指向的默认证书目录~~ 该方案已废弃（群晖不接受直接改证书目录文件），见下一条修订记录。
+- 验证：证书工作流测试 49 项 47 通过 0 失败（仅 workerd SSH 冒烟跳过），含真实无头 Chrome 的桌面/移动界面验收；前端 tsc --noEmit 通过；Wrangler deploy --dry-run 通过。未部署、未改动线上 D1 与凭据。
+
+## 群晖目标改用 DSM Web API（2026-10-28 修订）
+- 用户反馈原 SSH 写文件方案完全不对：群晖证书必须通过 DSM 管理接口设置（等价于浏览器登录 DSM 后在“控制面板 > 安全性 > 证书”里导入），并参考开源实现（acme.sh 的 synology_dsm hook、synology-api 的调用序列）。
+- 新增 src/deploy/synology.ts：先 GET /webapi/query.cgi?api=SYNO.API.Info 发现接口路径，再 POST SYNO.API.Auth（version、method=login、format=sid、account、passwd、可选 otp_code、device_name=CertHub，enable_syno_token=yes）取 sid 与 SynoToken，然后 SYNO.Core.Certificate.CRT method=list 列出现有证书，SYNO.Core.Certificate method=import 以 multipart 提交 key/cert/inter_cert（首证书为 cert、其余链进 inter_cert）/id/desc/as_default，最后 SYNO.API.Auth method=logout（无论成败）。
+- 证书按描述（desc）匹配已有项：描述不存在且未勾选“同名证书不存在时新建”时报错“DSM 中不存在描述为…的证书”；as_default 取“设为默认证书”或该证书原本就是默认；成功回执区分“已在群晖 DSM 新建证书/已更新群晖 DSM 证书”并附“已设为默认证书”“HTTP 服务已重新加载”。登录失败按 DSM 错误码翻译（400 账号密码错误、401 账号不存在、403 需验证码或非两步验证管理员、404 验证码错误、406 强制两步验证、408/409/410 密码过期、105 非管理员）。
+- 校验与字段：config 使用 url/account/certificate/create/makeDefault/timeout，密码与两步验证码（6 位数字，可选）走 secret；DSM 地址仅允许 http/https、禁止带凭据/路径/查询且拒绝私网地址；描述非空 ≤100 字符且不含反斜杠与换行。src/deployment.ts 将 provider=synology 路由到 deploySynology；资源“测试”端点改为真实 login+list，无证书时提示“尚未创建证书”。
+- 前端 Resources 表单同步：DSM 地址 / DSM 账号 / DSM 密码 / 证书描述 / 两个 Switch（同名证书不存在时新建、设为 DSM 默认证书）/ 超时 / 两步验证码（可选），文案说明“通过 DSM 管理接口安装证书，等同于在控制面板中导入证书”。
+- 验证：certificate-workflow 测试 50 项 48 通过 0 失败（2 项 workerd SSH/SFTP 冒烟为设计内跳过），Synology 用例以 mock fetch 断言发现/登录/列表/导入 multipart/登出全链路与错误分支；真实无头 Chrome 桌面验收生成 _artifacts/certificate-workflow/target-synology.png，人工确认字段与开关状态正确；前端 tsc --noEmit 通过。未部署、未改动线上 D1 与凭据。

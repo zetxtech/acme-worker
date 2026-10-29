@@ -6,6 +6,7 @@ import {sha256Hex} from "./edge/tencent";
 import {deployTarget, orderDomains} from "./edge";
 import {deployHook} from "./deploy/hook";
 import {deploySsh} from "./deploy/ssh";
+import {deploySynology} from "./deploy/synology";
 import {validateResourceConfig} from "./deploy/config";
 import {X509Certificate} from 'node:crypto';
 import {cloudMarket} from './edge/endpoints';
@@ -40,6 +41,7 @@ async function execute(env: Bindings, target: Resource, secrets: Record<string, 
     const artifact = {orderId: order.uuid, version, domains, certificate: order.cert, privateKey: order.keys};
     if (target.provider === "https") return deployHook(target.config, secrets, artifact);
     if (["ssh", "nginx", "traefik"].includes(target.provider)) return deploySsh(target.provider, target.config, secrets, artifact);
+    if (target.provider === "synology") return deploySynology(target.config, secrets, artifact);
     if (target.provider === "edgeone" && target.config.hosts?.some((host: string) => !domains.some((domain) => certificateCoversHost(domain, host)))) {
         throw new Error("EdgeOne hosts are not covered by this certificate");
     }

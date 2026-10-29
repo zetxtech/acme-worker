@@ -67,7 +67,7 @@ export function accountScope(resource: Resource): boolean {
 export function canUse(resource: Resource, mail: string, domains: string[] = []): boolean {
     const owner = resource.owner === mail.toLowerCase();
     if (accountScope(resource)) return resource.enabled && owner;
-    if (resource.kind === 'DEPLOY_TARGET' && ['edgeone', 'esa'].includes(resource.provider) && resource.scopeMode === 'certificate'
+    if (resource.kind === 'DEPLOY_TARGET' && resource.scopeMode === 'certificate'
         && !resource.zones.length && !resource.grants.length) return resource.enabled && owner;
     return resource.enabled && resource.zones.length > 0 && (owner || resource.grants.includes(mail.toLowerCase()))
         && domains.every((domain) => inScope(domain, resource.zones));
@@ -97,17 +97,17 @@ export async function saveResource(dao: Dao, secret: string | undefined, kind: R
         throw new Error("Resource ownership required");
     }
     const provider = String(body.provider ?? existing?.provider ?? "");
-    if (kind === "DNS_ACCOUNT" ? !dnsDefinition(provider) : !["https", "ssh", "nginx", "traefik", "edgeone", "esa"].includes(provider)) throw new Error("Unsupported provider");
+    if (kind === "DNS_ACCOUNT" ? !dnsDefinition(provider) : !["https", "ssh", "nginx", "traefik", "synology", "edgeone", "esa"].includes(provider)) throw new Error("Unsupported provider");
     if (kind === "DNS_ACCOUNT" && provider.startsWith("lego:") && !existing) await dnsShard(environment, provider, {forTest: true});
     if (existing && provider !== existing.provider) throw new Error("Create a new resource to change provider");
     const name = String(body.name ?? existing?.name ?? "").trim();
     if (!name || name.length > 100) throw new Error("Resource name must be 1 to 100 characters");
     const zones = body.zones ?? existing?.zones;
-    const scopeMode = body.scopeMode ?? existing?.scopeMode ?? "zones";
-    const certificateScope = scopeMode === 'certificate' && kind === 'DEPLOY_TARGET' && ['edgeone', 'esa'].includes(provider);
+    const scopeMode = body.scopeMode ?? existing?.scopeMode ?? (kind === "DEPLOY_TARGET" ? "certificate" : "zones");
+    const certificateScope = scopeMode === 'certificate' && kind === 'DEPLOY_TARGET';
     if (!["zones", "account", 'certificate'].includes(scopeMode) || kind !== "DNS_ACCOUNT" && scopeMode !== "zones" && !certificateScope) throw new Error("Invalid resource scope mode");
     if (!Array.isArray(zones) || zones.length > 100 || (!zones.length && scopeMode !== "account" && !certificateScope)) throw new Error("Explicit domain scopes are required");
-    if (certificateScope && zones.length) throw new Error('Private cloud target must use selected certificate scope');
+    if (certificateScope && zones.length) throw new Error('Targets deploying the selected certificate must not include domain restrictions');
     if (scopeMode === "account" && zones.length) throw new Error("Account scope must not include zone restrictions");
     const normalizedZones = zones.length ? requestedNames(zones.map((zone) => ({name: String(zone)}))) : [];
     if (normalizedZones.some((zone) => zone.startsWith("*."))) throw new Error("Zone scopes must not include wildcards");

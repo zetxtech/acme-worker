@@ -8,6 +8,7 @@ import {invalidateConf, readConf, writeConf} from "../db/conf";
 import {deploymentStates, pushSelectedOrder} from "../deployment";
 import {validateSelections} from "../resources";
 import {withSsh} from "../deploy/ssh";
+import {testSynology} from "../deploy/synology";
 import {assertPublicResolution, boundedResponse, publicHttps} from "../deploy/network";
 import {testTarget} from "../edge";
 import {dnsCatalog, dnsVerificationMatches} from "../lego/registry";
@@ -148,6 +149,9 @@ export function mountResourceRoutes(app: Hono<{Bindings: Bindings}>) {
                     const sftp = await new Promise<any>((resolve, reject) => client.sftp((error: Error, stream: any) => error ? reject(error) : resolve(stream)));
                     sftp.end();
                 });
+            } else if (resource.provider === "synology") {
+                const {detail} = await testSynology(resource.config, secrets);
+                return c.json({flags: 0, detail});
             } else if (resource.provider === "https") {
                 const url = publicHttps(resource.config.url);
                 await assertPublicResolution(url.hostname);

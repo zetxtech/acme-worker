@@ -8,6 +8,11 @@ export function hostFingerprintMatches(expected: string, hex: string): boolean {
         && `SHA256:${Buffer.from(hex, "hex").toString("base64").replace(/=+$/, "")}` === expected;
 }
 
+// Plain SSH/SFTP targets select Nginx, Traefik or a bare file upload; older resources keep their provider name.
+export function sshDeployMode(provider: string, config: Record<string, any>): string {
+    return provider === "ssh" ? String(config.deployMode ?? "sftp") : provider;
+}
+
 export function remotePath(value: unknown): string {
     if (typeof value !== "string" || !value.startsWith("/") || value.length > 1024
         || /[\x00-\x1f\x7f]/.test(value) || value.split("/").includes("..") || value.endsWith("/")) {
@@ -19,11 +24,13 @@ export function remotePath(value: unknown): string {
 export function validateSshConfig(config: Record<string, any>) {
     publicHost(String(config.host ?? ""));
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(config.username ?? "")) throw new Error("SSH username is required");
-    if (!/^SHA256:[A-Za-z0-9+/]{43}$/.test(config.fingerprint ?? "")) throw new Error("Pinned SHA256 SSH host fingerprint is required");
-    if (!Number.isInteger(Number(config.port ?? 22)) || Number(config.port ?? 22) < 1 || Number(config.port ?? 22) > 65535
-        || Number(config.port) === 25) throw new Error("Invalid SSH port");
+    if (config.fingerprint && !/^SHA256:[A-Za-z0-9+/]{43}$/.test(config.fingerprint)) {
+        throw new Error("SSH host fingerprint must be a SHA256 value such as SHA256:...");
+    }
+    const port = Number(config.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || port === 25) throw new Error("An SSH port from 1 to 65535 is required");
     for (const field of ["testCommand", "reloadCommand"]) {
-        if (config[field] && (typeof config[field] !== "string" || config[field].length > 2000 || config[field].includes("\0"))) {
+        if (config[field] && (typeof config[field] !== "string" || config[field].length > 4000 || config[field].includes("\0"))) {
             throw new Error("Invalid SSH command");
         }
     }
@@ -36,6 +43,7 @@ export async function withSsh<T>(config: Record<string, any>, secrets: Record<st
     if (!secrets.password && !secrets.privateKey) throw new Error("SSH password or private key is required");
     const client = new Client();
     const maximum = Math.max(3000, Math.min(28000, Number(config.timeout) || 25000));
+    const port = Number(config.port);
     try {
         return await new Promise<T>((resolve, reject) => {
             const timer = setTimeout(() => { client.destroy(); reject(new Error("SSH deployment timed out")); }, maximum);
@@ -48,10 +56,11 @@ export async function withSsh<T>(config: Record<string, any>, secrets: Record<st
                 finally { clearTimeout(timer); client.end(); }
             });
             try {
-                client.connect({host: config.host, port: Number(config.port) || 22, username: config.username,
+                client.connect({host: config.host, port, username: config.username,
                     password: secrets.password || undefined, privateKey: secrets.privateKey || undefined,
                     passphrase: secrets.passphrase || undefined, readyTimeout: Math.min(10000, maximum),
-                    hostHash: "sha256", hostVerifier: (hex: string) => hostFingerprintMatches(config.fingerprint, hex),
+                    ...(config.fingerprint ? {hostHash: "sha256",
+                        hostVerifier: (hex: string) => hostFingerprintMatches(config.fingerprint, hex)} : {}),
                     algorithms: {kex: ["ecdh-sha2-nistp256", "ecdh-sha2-nistp384"],
                         cipher: ["aes128-ctr", "aes256-ctr"], hmac: ["hmac-sha2-256-etm@openssh.com", "hmac-sha2-256"]}});
             } catch (error) { clearTimeout(timer); reject(error); }
@@ -160,9 +169,10 @@ export async function deploySsh(provider: string, config: Record<string, any>, s
     artifact: {certificate: string; privateKey: string; domains: string[]}, session = withSsh): Promise<void> {
     return session(config, secrets, async (client) => {
         const sftp = await new Promise<any>((resolve, reject) => client.sftp((error: Error | null, stream: any) => error ? reject(error) : resolve(stream)));
-        const acmeMode = provider === "traefik" && config.traefikMode === "acme-json";
+        const mode = sshDeployMode(provider, config);
+        const acmeMode = mode === "traefik" && config.traefikMode === "acme-json";
         const primary = remotePath(acmeMode ? config.acmePath : config.format === "pfx" ? config.pfxPath : config.certificatePath);
-        const lock = (provider === "traefik" && !acmeMode ? remotePath(config.dynamicPath) : primary) + ".acme-lock";
+        const lock = (mode === "traefik" && !acmeMode ? remotePath(config.dynamicPath) : primary) + ".acme-lock";
         try { await sftpCall(sftp, "mkdir", lock, {mode: 0o700}); }
         catch { throw new Error("Remote deployment is locked; retry later or inspect a stale lock"); }
         try {
@@ -180,7 +190,7 @@ export async function deploySsh(provider: string, config: Record<string, any>, s
             } else {
                 files.push({path: primary, content: artifact.certificate, mode: 0o644},
                     {path: remotePath(config.privateKeyPath), content: artifact.privateKey, mode: config.privateKeyMode === "0640" ? 0o640 : 0o600});
-                if (provider === "traefik") {
+                if (mode === "traefik") {
                     const path = remotePath(config.dynamicPath);
                     let existing: any = {};
                     try { existing = parseYaml(await readRemote(sftp, path), {maxAliasCount: 10}) ?? {}; }
@@ -195,8 +205,8 @@ export async function deploySsh(provider: string, config: Record<string, any>, s
             }
             if (new Set(files.map((file) => file.path)).size !== files.length) throw new Error("Deployment file paths must be different");
             const activate = async () => {
-                await command(client, config.testCommand || (provider === "nginx" ? "nginx -t" : undefined));
-                await command(client, config.reloadCommand || (provider === "nginx" ? "nginx -s reload" : undefined));
+                await command(client, config.testCommand || (mode === "nginx" ? "nginx -t" : undefined));
+                await command(client, config.reloadCommand || (mode === "nginx" ? "nginx -s reload" : undefined));
             };
             await replaceRemoteFiles(sftp, files, activate, activate, acmeMode ? async () => {
                 if (await readRemote(sftp, primary) !== previousAcme) throw new Error("acme.json changed during deployment; refusing overwrite");

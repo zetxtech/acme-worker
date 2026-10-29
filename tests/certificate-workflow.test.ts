@@ -19,7 +19,8 @@ import {esaCall} from '../src/edge/aliyun';
 import {CloudHttpError} from '../src/edge/http-error';
 import {boundedResponse, publicHost, publicHttps} from "../src/deploy/network";
 import {deployHook} from "../src/deploy/hook";
-import {hostFingerprintMatches, mergeTraefikAcme, remotePath, replaceRemoteFiles, validateSshConfig} from "../src/deploy/ssh";
+import {hostFingerprintMatches, mergeTraefikAcme, remotePath, replaceRemoteFiles, sshDeployMode, validateSshConfig} from "../src/deploy/ssh";
+import {deploySynology, splitCertificateChain, testSynology} from "../src/deploy/synology";
 import {certificateCoversHost, pushSelectedOrder, syncSelectedOrders} from "../src/deployment";
 import {validateResourceConfig} from "../src/deploy/config";
 import {D1Dao} from "../src/db/dao.d1";
@@ -331,14 +332,107 @@ test("HTTPS hooks carry authentication, signed timestamp and stable version with
     } finally { globalThis.fetch = original; }
 });
 
-test("SSH requires a pinned host key and refuses path traversal", () => {
+test("SSH pins the host key only when a fingerprint is provided and refuses path traversal", () => {
     const hex = "11".repeat(32);
     const fingerprint = `SHA256:${Buffer.from(hex, "hex").toString("base64").replace(/=+$/, "")}`;
     assert.equal(hostFingerprintMatches(fingerprint, hex), true);
     assert.equal(hostFingerprintMatches(fingerprint, "22".repeat(32)), false);
-    assert.throws(() => validateSshConfig({host: "ssh.example.com", username: "deploy"}));
+    validateSshConfig({host: "ssh.example.com", username: "deploy", port: 22});
+    validateSshConfig({host: "ssh.example.com", username: "deploy", port: 2222, fingerprint, testCommand: "nginx -t\nnginx -s reload"});
+    assert.throws(() => validateSshConfig({host: "ssh.example.com", username: "deploy"}), /port/);
+    assert.throws(() => validateSshConfig({host: "ssh.example.com", username: "deploy", port: 25}), /port/);
+    assert.throws(() => validateSshConfig({host: "ssh.example.com", username: "deploy", port: 22, fingerprint: "sha256:short"}), /fingerprint/);
     assert.throws(() => remotePath("/etc/../root/key"));
     assert.equal(remotePath("/etc/nginx/tls/fullchain.pem"), "/etc/nginx/tls/fullchain.pem");
+});
+
+test("SSH deployment modes cover legacy providers and grouped targets", () => {
+    assert.equal(sshDeployMode("ssh", {}), "sftp");
+    assert.equal(sshDeployMode("ssh", {deployMode: "nginx"}), "nginx");
+    assert.equal(sshDeployMode("nginx", {}), "nginx");
+    assert.equal(sshDeployMode("traefik", {}), "traefik");
+    validateResourceConfig("ssh", {host: "server.example.com", port: 22, username: "root", deployMode: "nginx",
+        certificatePath: "/etc/nginx/tls/fullchain.pem", privateKeyPath: "/etc/nginx/tls/privkey.pem"}, {password: "fixture"});
+    assert.throws(() => validateResourceConfig("ssh", {host: "server.example.com", port: 22, username: "root", deployMode: "rsync"},
+        {password: "fixture"}), /deployment mode/);
+});
+
+test("Synology targets use the DSM web API, replace the named certificate and log out", async () => {
+    const original = globalThis.fetch;
+    const requests: {url: string; method: string; body: string; form?: FormData}[] = [];
+    const chain = "-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nintermediate\n-----END CERTIFICATE-----\n";
+    const privateKey = "-----BEGIN PRIVATE KEY-----\nfixture-key\n-----END PRIVATE KEY-----\n";
+    let certificates = [{id: "cert-id", desc: "zetx.tech", is_default: true}];
+    let restarted = true;
+    globalThis.fetch = (async (input: any, options: any = {}) => {
+        const url = String(input);
+        if (url.startsWith("https://cloudflare-dns.com/dns-query")) return Response.json({Answer: [{type: 1, data: "93.184.216.34"}]});
+        const body = options.body instanceof URLSearchParams ? options.body.toString()
+            : typeof options.body === "string" ? options.body : "";
+        requests.push({url, method: options.method ?? "GET", body, form: options.body instanceof FormData ? options.body : undefined});
+        if (url.includes("query.cgi")) return Response.json({success: true, data: {"SYNO.API.Auth": {path: "auth.cgi", maxVersion: 6}}});
+        if (url.includes("/webapi/auth.cgi")) {
+            if (url.includes("method=logout")) return Response.json({success: true});
+            return Response.json({success: true, data: {sid: "sid-fixture", synotoken: "token-fixture"}});
+        }
+        if (url.includes("/webapi/entry.cgi")) {
+            if (options.body instanceof FormData) return Response.json({success: true, data: {restart_httpd: restarted}});
+            return Response.json({success: true, data: {certificates}});
+        }
+        throw new Error(`unexpected request ${url}`);
+    }) as any;
+    try {
+        const login = requests.length;
+        const result = await deploySynology({url: "https://nas.example.com:5001", account: "admin", certificate: "zetx.tech", makeDefault: false},
+            {password: "fixture-password"}, {certificate: chain, privateKey});
+        assert.match(result.detail, /已更新群晖 DSM 证书/);
+        assert.match(result.detail, /重新加载/);
+        const discovery = requests[0];
+        assert.match(discovery.url, /query\.cgi\?api=SYNO\.API\.Info/);
+        const auth = requests.find((request) => request.method === "POST" && request.url.includes("/webapi/auth.cgi"))!;
+        assert.match(auth.body, /method=login/);
+        assert.match(auth.body, /enable_syno_token=yes/);
+        assert.match(auth.body, /passwd=fixture-password/);
+        assert.equal(requests.every((request) => !request.url.includes("fixture-password")), true);
+        const list = requests.find((request) => request.body.includes("method=list"))!;
+        assert.match(list.body, /api=SYNO\.Core\.Certificate\.CRT/);
+        const upload = requests.find((request) => request.form)!;
+        assert.match(upload.url, /method=import/);
+        assert.match(upload.url, /api=SYNO\.Core\.Certificate&/);
+        assert.match(upload.url, /SynoToken=token-fixture/);
+        assert.equal(upload.form!.get("id"), "cert-id");
+        assert.equal(upload.form!.get("desc"), "zetx.tech");
+        assert.equal(upload.form!.get("as_default"), "true");
+        assert.equal(await (upload.form!.get("cert") as Blob).text(), "-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----\n");
+        assert.match(await (upload.form!.get("inter_cert") as Blob).text(), /intermediate/);
+        assert.match(await (upload.form!.get("key") as Blob).text(), /fixture-key/);
+        assert.equal(requests.length, login + 5);
+        assert.equal(requests.filter((request) => request.url.includes("method=logout")).length, 1);
+
+        // The named certificate decides replacement, the default flag is preserved, and a missing name needs the create option.
+        certificates = [{id: "other-id", desc: "other.example.com", is_default: false}];
+        const missing = {url: "https://nas.example.com:5001", account: "admin", certificate: "zetx.tech", create: false};
+        await assert.rejects(deploySynology(missing, {password: "fixture-password"}, {certificate: chain, privateKey}), /不存在描述为/);
+        assert.equal(requests.filter((request) => request.form).length, 1);
+        const created = await deploySynology({...missing, create: true, makeDefault: true},
+            {password: "fixture-password"}, {certificate: chain, privateKey});
+        assert.match(created.detail, /已在群晖 DSM 新建证书/);
+        const create = requests.filter((request) => request.form).at(-1)!;
+        assert.equal(create.form!.get("id"), "");
+        assert.equal(create.form!.get("as_default"), "true");
+        restarted = false;
+        assert.match((await testSynology({url: "https://nas.example.com:5001", account: "admin", certificate: "zetx.tech", timeout: 6000},
+            {password: "fixture-password"})).detail, /尚未创建证书/);
+        await assert.rejects(deploySynology({url: "http://127.0.0.1:5001", account: "admin", certificate: "zetx.tech"},
+            {password: "fixture-password"}, {certificate: chain, privateKey}), /Private, reserved and local destinations/);
+        await assert.rejects(deploySynology({url: "https://nas.example.com:5001", account: "admin", certificate: "zetx\\tech"},
+            {password: "fixture-password"}, {certificate: chain, privateKey}), /description/);
+        await assert.rejects(deploySynology({url: "https://nas.example.com:5001", account: "admin", certificate: "zetx.tech"},
+            {password: "fixture-password", otp: "12345"}, {certificate: chain, privateKey}), /six digits/);
+        await assert.rejects(deploySynology({url: "https://nas.example.com:5001", account: "admin", certificate: "zetx.tech"},
+            {otp: "123456"}, {certificate: chain, privateKey}), /password is required/);
+        assert.throws(() => splitCertificateChain("no certificate"), /Invalid certificate chain/);
+    } finally { globalThis.fetch = original; }
 });
 
 test("Traefik resolver merge preserves accounts and unrelated certificates", () => {
@@ -373,7 +467,10 @@ test("SFTP activation failure restores original files rather than keeping a fail
 test("resource configuration never permits plaintext credential fields or unsafe hook URLs", () => {
     assert.throws(() => validateResourceConfig("cloudflare", {token: "plaintext"}, {token: "encrypted"}));
     assert.throws(() => validateResourceConfig("https", {url: "https://127.0.0.1"}, {authToken: "secret"}));
-    assert.throws(() => validateResourceConfig("nginx", {host: "server.example.com", username: "root", format: "pfx"}, {password: "secret"}));
+    assert.throws(() => validateResourceConfig("nginx", {host: "server.example.com", port: 22, username: "root", format: "pfx",
+        certificatePath: "/etc/nginx/tls/fullchain.pem", privateKeyPath: "/etc/nginx/tls/privkey.pem"}, {password: "secret"}), /PEM/);
+    assert.throws(() => validateResourceConfig("nginx", {host: "server.example.com", port: 22, username: "root",
+        certificatePath: "/etc/nginx/tls/fullchain.pem", privateKeyPath: "/etc/nginx/tls/privkey.pem"}, {password: "secret", token: "plaintext"}), /Unsupported configuration/);
 });
 
 test("certificate host coverage does not confuse wildcard coverage with broad resource scopes", () => {
@@ -1539,30 +1636,72 @@ test("desktop/mobile UI submits scoped resources and exposes CA and deployment s
         await page.screenshot({path: directory + 'cloud-upload-target.png', fullPage: true});
         await page.getByRole('button', {name: /取\s*消/, exact: true}).click();
         await page.getByRole("button", {name: /\u65b0\s*\u5efa/}).click();
+        await page.getByLabel("\u540d\u79f0", {exact: true}).fill("NAS target");
+        assert.equal(await page.getByLabel("\u7aef\u53e3", {exact: true}).inputValue(), "22");
+        await page.getByLabel("\u7c7b\u578b", {exact: true}).press("ArrowDown");
+        await page.locator(".ant-select-dropdown:visible").getByText("\u7fa4\u6656 (Synology)", {exact: true}).click();
+        await page.getByText("\u901a\u8fc7 DSM \u7ba1\u7406\u63a5\u53e3\u5b89\u88c5\u8bc1\u4e66\uff0c\u7b49\u540c\u4e8e\u5728\u63a7\u5236\u9762\u677f\u4e2d\u5bfc\u5165\u8bc1\u4e66", {exact: true}).waitFor();
+        assert.equal(await page.getByLabel("DSM \u5730\u5740", {exact: true}).count(), 1);
+        assert.equal(await page.getByLabel("DSM \u8d26\u53f7", {exact: true}).count(), 1);
+        assert.equal(await page.getByLabel("\u8bc1\u4e66\u63cf\u8ff0", {exact: true}).count(), 1);
+        assert.equal(await page.getByLabel("DSM \u5bc6\u7801", {exact: true}).count(), 1);
+        assert.equal(await page.getByLabel("\u4e24\u6b65\u9a8c\u8bc1\u7801\uff08\u53ef\u9009\uff09", {exact: true}).count(), 1);
+        assert.equal(await page.getByLabel("\u540c\u540d\u8bc1\u4e66\u4e0d\u5b58\u5728\u65f6\u65b0\u5efa", {exact: true}).getAttribute("aria-checked"), "true");
+        assert.equal(await page.getByLabel("\u8bbe\u4e3a DSM \u9ed8\u8ba4\u8bc1\u4e66", {exact: true}).getAttribute("aria-checked"), "true");
+        assert.equal(await page.getByLabel("\u670d\u52a1\u5668\u5730\u5740", {exact: true}).count(), 0);
+        assert.equal(await page.getByLabel("\u68c0\u67e5\u547d\u4ee4", {exact: true}).count(), 0);
+        assert.equal(await page.getByLabel("\u90e8\u7f72\u54ea\u4e9b\u57df\u540d", {exact: true}).count(), 0);
+        await page.getByLabel("DSM \u5730\u5740", {exact: true}).fill("https://nas.example.org:5001");
+        await page.getByLabel("\u8bc1\u4e66\u63cf\u8ff0", {exact: true}).fill("zetx.tech");
+        await page.getByLabel("DSM \u8d26\u53f7", {exact: true}).fill("admin");
+        await page.getByLabel("DSM \u5bc6\u7801", {exact: true}).fill("synthetic-dsm-password");
+        await page.screenshot({path: directory + 'target-synology.png', fullPage: true});
+        await page.getByRole("button", {name: /\u4fdd\s*\u5b58/}).click();
+        await page.getByRole("dialog").waitFor({state: "hidden"});
+        const synologyTarget = calls.filter((call) => call.body?.provider === "synology").at(-1)!.body;
+        assert.equal(synologyTarget.config.url, "https://nas.example.org:5001");
+        assert.equal(synologyTarget.config.account, "admin");
+        assert.equal(synologyTarget.config.certificate, "zetx.tech");
+        assert.equal(synologyTarget.config.create, true);
+        assert.equal(synologyTarget.config.makeDefault, true);
+        assert.equal(synologyTarget.secrets.password, "synthetic-dsm-password");
+        assert.equal("host" in synologyTarget.config, false);
+        assert.equal(synologyTarget.scopeMode, "certificate");
+        assert.deepEqual(synologyTarget.zones, []);
+        await page.getByRole("button", {name: /\u65b0\s*\u5efa/}).click();
         await page.getByLabel("\u540d\u79f0", {exact: true}).fill("Target defaults");
         assert.equal(await page.getByLabel("\u7aef\u53e3", {exact: true}).inputValue(), "22");
         await page.getByLabel("\u670d\u52a1\u5668\u5730\u5740", {exact: true}).fill("old.example.org");
         await page.getByLabel("\u7c7b\u578b", {exact: true}).press("ArrowDown");
-        await page.locator(".ant-select-dropdown:visible").getByText("HTTPS", {exact: true}).click();
+        await page.locator(".ant-select-dropdown:visible").getByText("HTTP / HTTPS", {exact: true}).click();
         await page.getByLabel("\u63a5\u6536\u5730\u5740", {exact: true}).fill("https://old.example.org/cert");
+        assert.equal(await page.getByLabel("\u90e8\u7f72\u54ea\u4e9b\u57df\u540d", {exact: true}).count(), 0);
         await page.getByLabel("\u7c7b\u578b", {exact: true}).press("ArrowDown");
-        await page.locator(".ant-select-dropdown:visible").getByText("Nginx (SSH)", {exact: true}).click();
+        await page.locator(".ant-select-dropdown:visible").getByText("SSH / SFTP", {exact: true}).click();
         assert.equal(await page.getByLabel("\u670d\u52a1\u5668\u5730\u5740", {exact: true}).inputValue(), "");
         assert.equal(await page.getByLabel("\u7aef\u53e3", {exact: true}).inputValue(), "22");
+        assert.equal(await page.getByLabel("\u8bc1\u4e66\u5b8c\u6574\u94fe\u8def\u5f84", {exact: true}).inputValue(), "/etc/ssl/fullchain.pem");
+        await page.getByLabel("\u90e8\u7f72\u65b9\u5f0f", {exact: true}).press("ArrowDown");
+        await page.locator(".ant-select-dropdown:visible").getByText("Nginx", {exact: true}).click();
         assert.equal(await page.getByLabel("\u8bc1\u4e66\u5b8c\u6574\u94fe\u8def\u5f84", {exact: true}).inputValue(), "/etc/nginx/tls/fullchain.pem");
+        assert.equal(await page.getByLabel("\u68c0\u67e5\u547d\u4ee4", {exact: true}).inputValue(), "nginx -t");
+        await page.getByLabel("\u68c0\u67e5\u547d\u4ee4", {exact: true}).fill("nginx -t\nnginx -T > /dev/null");
+        assert.equal(await page.locator('[data-shell-overlay="true"]').first().textContent(), "nginx -t\nnginx -T > /dev/null\n");
         await page.getByLabel("\u670d\u52a1\u5668\u5730\u5740", {exact: true}).fill("nginx.example.org");
         await page.getByLabel("\u7528\u6237\u540d", {exact: true}).fill("deploy");
         await page.getByLabel("\u767b\u5f55\u5bc6\u7801", {exact: true}).fill("synthetic-target-password");
-        await page.getByLabel("SSH \u4e3b\u673a\u6307\u7eb9 (SHA256)", {exact: true}).fill("SHA256:synthetic-only");
-        await page.getByLabel("\u90e8\u7f72\u54ea\u4e9b\u57df\u540d", {exact: true}).fill("example.com");
-        await page.getByLabel("\u90e8\u7f72\u54ea\u4e9b\u57df\u540d", {exact: true}).press("Enter");
+        await page.getByLabel("SSH \u4e3b\u673a\u6307\u7eb9 (SHA256)", {exact: true}).fill(`SHA256:${'A'.repeat(43)}`);
+        await page.screenshot({path: directory + 'target-ssh-command-editor.png', fullPage: true});
         await page.getByRole("button", {name: /\u4fdd\s*\u5b58/}).click();
         await page.getByRole("dialog").waitFor({state: "hidden"});
         const targetPayload = calls.find((call) => call.body?.name === "Target defaults")!.body;
         assert.equal(targetPayload.config.port, 22);
+        assert.equal(targetPayload.config.deployMode, "nginx");
         assert.equal(targetPayload.config.certificatePath, "/etc/nginx/tls/fullchain.pem");
+        assert.equal(targetPayload.config.testCommand, "nginx -t\nnginx -T > /dev/null");
         assert.equal("url" in targetPayload.config, false);
-        assert.deepEqual(targetPayload.zones, ["example.com"]);
+        assert.equal(targetPayload.scopeMode, "certificate");
+        assert.deepEqual(targetPayload.zones, []);
         await page.setViewportSize({width: 390, height: 844});
         await page.goto(`${base}/#/apply`);
         await page.getByPlaceholder("example.com", {exact: true}).fill("example.com");
@@ -1897,7 +2036,7 @@ test("background workflow continues automatic DNS, pauses manual input and prese
     } finally { _resetDaoForTests(); invalidateAll(); database.close(); }
 });
 
-test('private cloud targets use selected certificates while sharing remains explicitly domain limited', async () => {
+test('deploy targets use selected certificates while sharing remains explicitly domain limited', async () => {
     const storage = new Map<string, string>();
     const dao: any = {getConf: async (name: string) => storage.get(name) ?? null,
         upsertConf: async (name: string, value: string) => { storage.set(name, value); }};
@@ -1910,8 +2049,26 @@ test('private cloud targets use selected certificates while sharing remains expl
     assert.equal(canUse(resource, 'other@example.com', ['a.example.com']), false);
     assert.equal(resourceSelectable({...maskedResource(resource)}, user.mail, ['a.example.com']), true);
     await assert.rejects(saveResource(dao, secret, 'DEPLOY_TARGET', user, {grants: ['other@example.com']}, resource.id));
+    // SSH, Synology and hook targets deploy their owner's selected certificate without a domain list.
+    const ssh = await saveResource(dao, secret, 'DEPLOY_TARGET', user,
+        {name: 'Web server', provider: 'ssh', zones: [], config: {host: 'server.example.com', port: 22, username: 'root', deployMode: 'nginx',
+            certificatePath: '/etc/nginx/tls/fullchain.pem', privateKeyPath: '/etc/nginx/tls/privkey.pem'}, secrets: {password: 'fixture'}}, 'ssh-target');
+    assert.equal(ssh.scopeMode, 'certificate');
+    assert.equal(canUse(ssh, user.mail, ['a.example.com']), true);
+    assert.equal(canUse(ssh, 'other@example.com', ['a.example.com']), false);
+    assert.equal(resourceSelectable({...maskedResource(ssh)}, user.mail, ['a.example.com']), true);
+    const synology = await saveResource(dao, secret, 'DEPLOY_TARGET', user,
+        {name: 'Synology NAS', provider: 'synology', zones: [], config: {url: 'https://nas.example.com:5001', account: 'admin',
+            certificate: 'zetx.tech', create: true, makeDefault: true}, secrets: {password: 'fixture'}}, 'synology-target');
+    assert.equal(synology.scopeMode, 'certificate');
+    const hook = await saveResource(dao, secret, 'DEPLOY_TARGET', user,
+        {name: 'Hook', provider: 'https', zones: [], config: {url: 'https://receiver.example.com/cert'}, secrets: {authToken: 'fixture'}}, 'hook-target');
+    assert.equal(hook.scopeMode, 'certificate');
     await assert.rejects(saveResource(dao, secret, 'DEPLOY_TARGET', user,
-        {name: 'forged', provider: 'https', scopeMode: 'certificate', zones: [], grants: [], config: {}, secrets: {}}, 'not-cloud'));
+        {name: 'unsupported', provider: 'rsync', scopeMode: 'certificate', zones: [], config: {}, secrets: {}}, 'not-target'), /Unsupported provider/);
+    await assert.rejects(saveResource(dao, secret, 'DEPLOY_TARGET', user,
+        {name: 'restricted', provider: 'ssh', scopeMode: 'certificate', zones: ['example.com'], config: {}, secrets: {}}, 'bad-scope'),
+        /domain restrictions/);
 });
 
 test('mainland and international sites use their own signed endpoints and reject arbitrary hosts', async () => {

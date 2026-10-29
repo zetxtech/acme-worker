@@ -1,0 +1,117 @@
+.wrap {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-input, 12px);
+  transition: border-color var(--duration-base, 0.25s) var(--ease-out, ease),
+    box-shadow var(--duration-base, 0.25s) var(--ease-out, ease);
+}
+
+.wrap:hover {
+  border-color: var(--brand);
+}
+
+.wrap:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+
+.wrap[data-disabled='true'] {
+  background: var(--bg-code);
+}
+
+/* Two identical layers: the highlighted pre and the transparent textarea. */
+.overlay,
+.input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 8px 11px;
+  border: 0;
+  box-sizing: border-box;
+  font-family: var(--font-display);
+  font-size: 13px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  tab-size: 8;
+  scrollbar-gutter: stable;
+}
+
+.overlay {
+  overflow: hidden;
+  color: var(--text-1);
+  pointer-events: none;
+  user-select: none;
+}
+
+.overlay::-webkit-scrollbar,
+.input::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.overlay::-webkit-scrollbar-track,
+.input::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.overlay::-webkit-scrollbar-thumb,
+.input::-webkit-scrollbar-thumb {
+  background: var(--line-strong, #d6cfbe);
+  border-radius: 999px;
+}
+
+.input {
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text-1);
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--text-3);
+}
+
+.input::selection {
+  background: rgba(46, 196, 166, 0.28);
+}
+
+.wrap[data-disabled='true'] .input {
+  cursor: not-allowed;
+}
+
+.placeholder {
+  color: var(--text-3);
+}
+
+.comment {
+  color: var(--text-3);
+  font-style: italic;
+}
+
+.string {
+  color: var(--brand-ink, #0f766e);
+}
+
+.variable {
+  color: var(--accent-ink, #c04a2c);
+}
+
+.keyword {
+  color: var(--lavender, #b892ff);
+  font-weight: var(--fw-semibold, 600);
+}
+
+.operator {
+  color: var(--accent, #ff7a59);
+}
